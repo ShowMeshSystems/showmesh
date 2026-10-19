@@ -101,9 +101,22 @@ type fakeObservationLister struct {
 
 func (f *fakeObservationLister) ListObservations(_ context.Context, filter ObservationFilter) ([]observation.Observation, error) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.gotFilter = filter
-	f.mu.Unlock()
 	return f.obs, f.err
+}
+
+// setObs and currentObs swap and read obs while a night loop goroutine may be reading it.
+func (f *fakeObservationLister) setObs(obs []observation.Observation) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.obs = obs
+}
+
+func (f *fakeObservationLister) currentObs() []observation.Observation {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.obs
 }
 
 // lastFilter is the race-safe way to read gotFilter after ListObservations

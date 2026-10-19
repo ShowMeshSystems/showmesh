@@ -53,22 +53,22 @@ func (f *fakeFPPHost) sent() []string {
 func (f *fakeFPPHost) setPlaying(playlist string, positionMS int64) {
 	at := f.now()
 	observedAt := at
-	f.obs.obs = []observation.Observation{
+	f.obs.setObs([]observation.Observation{
 		{Resource: observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}, Signal: "fpp.reachable", Value: true, ObservedAt: &observedAt, CollectedAt: at, Source: "fpp-rest", Quality: observation.QualityDirect, ValidFor: time.Minute},
 		statusObservation("player-01", fppStatusValuePlaying, at),
 		playlistNameObservation("player-01", playlist, at),
 		positionMSObservation("player-01", positionMS, at),
-	}
+	})
 }
 
 func (f *fakeFPPHost) setIdle() {
 	at := f.now()
 	observedAt := at
-	f.obs.obs = []observation.Observation{
+	f.obs.setObs([]observation.Observation{
 		{Resource: observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}, Signal: "fpp.reachable", Value: true, ObservedAt: &observedAt, CollectedAt: at, Source: "fpp-rest", Quality: observation.QualityDirect, ValidFor: time.Minute},
 		statusObservation("player-01", fppStatusValueIdle, at),
 		playlistNameObservation("player-01", "", at),
-	}
+	})
 }
 
 func TestFullNight_StartsCyclesAndEndsWithFPPObservablyStopped(t *testing.T) {

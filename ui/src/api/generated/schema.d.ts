@@ -8180,6 +8180,10 @@ export interface components {
             fadeOutNightMs?: number;
             /** @description Optional. How long the lights take to fade in, starting when the resting playlist starts after a show. Left out means no fade. */
             lightsFadeInMs?: number;
+            /** @description Optional. How long rendered projections take to fade out, finishing as each show starts. Left out means the lights fade-out time. Set alone, projections fade and the lights do not. */
+            renderFadeOutMs?: number;
+            /** @description Optional. How long rendered projections take to fade in, starting when the resting playlist starts after a show. Left out means the lights fade-in time. Set alone, projections fade and the lights do not. */
+            renderFadeInMs?: number;
         };
         /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seams F1 and F6, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} - never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) - this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are entirely optional (RESTING-MODE.md §10's own opening line: a deployment that omits both runs the whole night loop unchanged). Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item, every siteControl action, every interlock signal) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
         ConfigNightSession: {
@@ -8200,6 +8204,10 @@ export interface components {
             fadeOutNightMs?: number;
             /** @description Optional. How long the lights take to fade in, starting when the resting playlist starts after a show. Left out means no fade. */
             lightsFadeInMs?: number;
+            /** @description Optional. How long rendered projections take to fade out, finishing as each show starts. Left out means the lights fade-out time. Set alone, projections fade and the lights do not. */
+            renderFadeOutMs?: number;
+            /** @description Optional. How long rendered projections take to fade in, starting when the resting playlist starts after a show. Left out means the lights fade-in time. Set alone, projections fade and the lights do not. */
+            renderFadeInMs?: number;
         };
         /** @description The body of GET and PUT /config/night.session/{id}, and of GET /config/night.session/{id}/revisions/{revision} (one past, immutable revision's full payload). */
         NightSessionConfigResponse: {

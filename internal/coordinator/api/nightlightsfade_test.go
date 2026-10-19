@@ -25,13 +25,15 @@ import (
 // write it expects, the way a real player takes longer than the tick's own
 // goroutine launch.
 type lightsNight struct {
-	t     *testing.T
-	now   time.Time
-	st    *store.Store
-	h     *handlers
-	api   *API
-	host  *fakeFPPHost
-	token string
+	t   *testing.T
+	now time.Time
+	// clockMu guards now against the projection fade sends, which read the clock from their own goroutines.
+	clockMu sync.Mutex
+	st      *store.Store
+	h       *handlers
+	api     *API
+	host    *fakeFPPHost
+	token   string
 
 	mu            sync.Mutex
 	log           []string
@@ -46,6 +48,7 @@ type lightsNight struct {
 	delay         func(f nightLightingFade) time.Duration
 	reportedGain  *int64
 	fadeActive    bool
+	renderPub     *fakeRenderPublisher
 }
 
 func (n *lightsNight) record(s string) {
@@ -101,8 +104,9 @@ func (n *lightsNight) publishReportedGain() {
 	if gain == nil {
 		return
 	}
-	kept := n.host.obs.obs[:0:0]
-	for _, o := range n.host.obs.obs {
+	current := n.host.obs.currentObs()
+	kept := current[:0:0]
+	for _, o := range current {
 		if o.Signal != testGainSignal && o.Signal != testFadeActiveSignal {
 			kept = append(kept, o)
 		}
@@ -112,10 +116,14 @@ func (n *lightsNight) publishReportedGain() {
 	for sig, v := range map[observation.SignalID]any{testGainSignal: *gain, testFadeActiveSignal: active} {
 		kept = append(kept, observation.Observation{Resource: res, Signal: sig, Value: v, ObservedAt: &at, CollectedAt: at, Source: "fpp-brightness", Quality: observation.QualityDirect, ValidFor: time.Minute})
 	}
-	n.host.obs.obs = kept
+	n.host.obs.setObs(kept)
 }
 
-func (n *lightsNight) advance(d time.Duration)           { n.now = n.now.Add(d) }
+func (n *lightsNight) advance(d time.Duration) {
+	n.clockMu.Lock()
+	defer n.clockMu.Unlock()
+	n.now = n.now.Add(d)
+}
 func (n *lightsNight) session() store.NightSessionRecord { return mustGetCurrentSession(n.t, n.st) }
 
 func (n *lightsNight) mustState(step, want string) {
@@ -171,7 +179,7 @@ func newLightsNight(t *testing.T, extra string) *lightsNight {
 func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *lightsNight {
 	t.Helper()
 	n := &lightsNight{t: t, now: testNow, awaitShowGain: true, awaitRestGain: strings.Contains(extra, "lightsFadeInMs")}
-	clock := func() time.Time { return n.now }
+	clock := func() time.Time { n.clockMu.Lock(); defer n.clockMu.Unlock(); return n.now }
 	obs := &fakeObservationLister{}
 	n.host = &fakeFPPHost{obs: obs, now: clock}
 
@@ -246,6 +254,8 @@ func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *
 	deps.FPP = &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: srv.URL}}}
 	backend := nightTestAssetBackend(t)
 	deps.AssetBackend = backend
+	n.renderPub = &fakeRenderPublisher{}
+	deps.RenderPublisher = n.renderPub
 	deps = deps.withDefaults()
 
 	api := New(deps, Options{Clock: clock, Logger: testLogger(), NightReadinessMaxAge: time.Hour})
@@ -292,10 +302,10 @@ func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *
 
 func (f *fakeFPPHost) setPlayingNoPosition(playlist string) {
 	at := f.now()
-	f.obs.obs = []observation.Observation{
+	f.obs.setObs([]observation.Observation{
 		statusObservation("player-01", fppStatusValuePlaying, at),
 		playlistNameObservation("player-01", playlist, at),
-	}
+	})
 }
 
 func (n *lightsNight) prepareAndStartPreshow() {
@@ -1409,6 +1419,71 @@ func TestLightsFade_FadeOutNightUsesItsOwnDuration(t *testing.T) {
 	}
 }
 
+// renderFadesAtFadeOut runs a night to the resting fade-out window opened by
+// lead and returns the projection fades sent from that moment on.
+func renderFadesAtFadeOut(t *testing.T, extra string, lead time.Duration) (*lightsNight, time.Time, []mqttCmdEnvelopeForTest) {
+	t.Helper()
+	oldDeadline, oldPoll := renderCommandConfirmDeadline, renderCommandPollInterval
+	renderCommandConfirmDeadline, renderCommandPollInterval = 50*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { renderCommandConfirmDeadline, renderCommandPollInterval = oldDeadline, oldPoll })
+
+	n := newLightsNight(t, extra)
+	renderPutSurface(t, n.st, "front", "halloween-2026", "render-01")
+	n.openToFirstShow()
+	n.endShowIntoResting()
+	end := n.restingEnd()
+	n.h.nightRenderFadeWG.Wait()
+	n.renderPub.mu.Lock()
+	n.renderPub.payload = nil
+	n.renderPub.mu.Unlock()
+
+	n.advance(end.Add(-lead).Sub(n.now))
+	n.host.setPlaying("halloween-resting", 0)
+	n.tick()
+	n.tick()
+	n.h.nightRenderFadeWG.Wait()
+	n.renderPub.mu.Lock()
+	defer n.renderPub.mu.Unlock()
+	return n, end, append([]mqttCmdEnvelopeForTest(nil), n.renderPub.payload...)
+}
+
+func mustOneRenderFadeOut(t *testing.T, sent []mqttCmdEnvelopeForTest, startsAt, endsAt time.Time) {
+	t.Helper()
+	if len(sent) != 1 {
+		t.Fatalf("projection fades sent at the fade-out = %d, want 1: %+v", len(sent), sent)
+	}
+	p := sent[0].Payload
+	if p.Action != "render.surface.fade" || p.Params["surfaceId"] != "front" || p.Params["targetPercent"] != float64(0) {
+		t.Fatalf("projection fade = %s %v, want render.surface.fade of front to 0", p.Action, p.Params)
+	}
+	if got, want := p.Params["endsAt"], endsAt.UTC().Format(time.RFC3339Nano); got != want {
+		t.Fatalf("projection fade ends at %v, want %v", got, want)
+	}
+	if got, want := p.Params["startsAt"], startsAt.UTC().Format(time.RFC3339Nano); got != want {
+		t.Fatalf("projection fade starts at %v, want %v", got, want)
+	}
+}
+
+func TestLightsFade_ProjectionsFadeOutWithTheLightsAndEndAtTheSameMoment(t *testing.T) {
+	_, end, sent := renderFadesAtFadeOut(t, `"lightsFadeOutMs": 20000, "renderFadeOutMs": 10000, `, 10*time.Second)
+	mustOneRenderFadeOut(t, sent, end.Add(-10*time.Second), end)
+}
+
+func TestLightsFade_ProjectionsFadeOnTheirOwnWhenTheLightsDoNot(t *testing.T) {
+	n, end, sent := renderFadesAtFadeOut(t, `"renderFadeOutMs": 15000, `, 15*time.Second)
+	mustOneRenderFadeOut(t, sent, end.Add(-15*time.Second), end)
+	for _, e := range n.events() {
+		if strings.HasPrefix(e, "gain:") && e != "gain:player-01:100:0s" {
+			t.Fatalf("with no lights fade the lights must not fade, got %q", e)
+		}
+	}
+}
+
+func TestLightsFade_ALongerProjectionFadeOutStartsEarlyAndEndsAtTheBoundary(t *testing.T) {
+	_, end, sent := renderFadesAtFadeOut(t, `"lightsFadeOutMs": 10000, "renderFadeOutMs": 30000, `, 30*time.Second)
+	mustOneRenderFadeOut(t, sent, end.Add(-30*time.Second), end)
+}
+
 func TestLightsFade_PowerDownDoesNotWaitForTheNightFade(t *testing.T) {
 	n := newLightsNight(t, `"lightsFadeOutMs": 20000, `)
 	n.openToFirstShow()
@@ -1433,5 +1508,35 @@ func TestLightsFade_FadeOutNightDurationIsReadBack(t *testing.T) {
 	resp, body := doRawRequest(t, n.api.Handler, req)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"fadeOutNightMs":5000`) {
 		t.Fatalf("GET night.session: status %d, body %s; want fadeOutNightMs 5000", resp.StatusCode, body)
+	}
+}
+
+func TestLightsFade_AProjectionFadeThatFailsToSendIsRetried(t *testing.T) {
+	oldDeadline, oldPoll := renderCommandConfirmDeadline, renderCommandPollInterval
+	oldBackoff := nightRenderFadeRetryBackoff
+	renderCommandConfirmDeadline, renderCommandPollInterval = 50*time.Millisecond, 10*time.Millisecond
+	nightRenderFadeRetryBackoff = 20 * time.Millisecond
+	t.Cleanup(func() {
+		renderCommandConfirmDeadline, renderCommandPollInterval = oldDeadline, oldPoll
+		nightRenderFadeRetryBackoff = oldBackoff
+	})
+
+	n := newLightsNight(t, `"lightsFadeOutMs": 20000, `)
+	renderPutSurface(t, n.st, "front", "halloween-2026", "render-01")
+	n.renderPub.mu.Lock()
+	n.renderPub.err = errors.New("broker unavailable")
+	n.renderPub.mu.Unlock()
+
+	n.h.nightRenderFade(context.Background(), n.now, store.NightSessionRecord{ID: "sess-retry", Cycle: 1}, "show", 100, time.Time{}, time.Time{}, 0)
+	time.Sleep(50 * time.Millisecond)
+	n.renderPub.mu.Lock()
+	n.renderPub.err = nil
+	n.renderPub.mu.Unlock()
+	n.h.nightRenderFadeWG.Wait()
+
+	n.renderPub.mu.Lock()
+	defer n.renderPub.mu.Unlock()
+	if len(n.renderPub.payload) != 1 || n.renderPub.payload[0].Payload.Params["targetPercent"] != float64(100) {
+		t.Fatalf("projection fades sent after the broker came back = %+v, want one to full level", n.renderPub.payload)
 	}
 }

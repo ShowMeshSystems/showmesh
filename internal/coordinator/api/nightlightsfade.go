@@ -200,8 +200,10 @@ func nightLightsFadeSeconds(d time.Duration) int {
 // transition into a show begins: the longest cue lead or lights fade-out.
 func nightTransitionLeadMs(p config.NightSessionPayload) int64 {
 	lead := nightEnterShowLeadMs(p.EnterShow.Cues)
-	if p.LightsFadeOutMs != nil && int64(*p.LightsFadeOutMs) > lead {
-		lead = int64(*p.LightsFadeOutMs)
+	for _, ms := range []*int{p.LightsFadeOutMs, nightRenderFadeOutMs(p)} {
+		if ms != nil && int64(*ms) > lead {
+			lead = int64(*ms)
+		}
 	}
 	return lead
 }
@@ -414,7 +416,8 @@ func (h *handlers) nightReportLights(ctx context.Context, rec store.NightSession
 // as the resting sequence ends, or for the first show as start-night's lead
 // ends over pre-show's resting playback.
 func (h *handlers) nightAdvanceLightsFadeOut(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload, boundaryE time.Time) {
-	if payload.LightsFadeOutMs == nil {
+	renderMs := nightRenderFadeOutMs(payload)
+	if payload.LightsFadeOutMs == nil && renderMs == nil {
 		return
 	}
 	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
@@ -422,8 +425,13 @@ func (h *handlers) nightAdvanceLightsFadeOut(ctx context.Context, now time.Time,
 	if !firstShow && (!has || anchor.Purpose != nightAnchorPurposeRestingOneShot) {
 		return
 	}
-	fadeOut := time.Duration(*payload.LightsFadeOutMs) * time.Millisecond
-	if now.Before(boundaryE.Add(-fadeOut)) || !now.Before(boundaryE) {
+	inWindow := func(ms int) bool {
+		return !now.Before(boundaryE.Add(-time.Duration(ms)*time.Millisecond)) && now.Before(boundaryE)
+	}
+	if renderMs != nil && inWindow(*renderMs) {
+		h.nightRenderFade(ctx, now, rec, "out", 0, boundaryE.Add(-time.Duration(*renderMs)*time.Millisecond), boundaryE, 0)
+	}
+	if payload.LightsFadeOutMs == nil || !inWindow(*payload.LightsFadeOutMs) {
 		return
 	}
 	h.lights().markFadeOut(rec)
@@ -447,8 +455,11 @@ func (h *handlers) nightRestingStopped(ctx context.Context, now time.Time, paylo
 // After any fade-out it waits for the resting playlist to be seen stopped, or
 // for the start, so the resting look is never lit again.
 func (h *handlers) nightRestoreShowGain(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload, afterStart bool) {
-	if !afterStart && h.lights().fadeOutRan(rec) && !h.nightRestingStopped(ctx, now, payload) {
+	if !afterStart && (h.lights().fadeOutRan(rec) || h.nightRenderFadeSent(rec, "out")) && !h.nightRestingStopped(ctx, now, payload) {
 		return
+	}
+	if nightRenderFadesConfigured(payload) {
+		h.nightRenderFade(ctx, now, rec, "show", 100, time.Time{}, time.Time{}, 0)
 	}
 	h.nightLightsStart(ctx, now, rec, payload, nightLightsStep{step: nightLightsStepShowGain, target: 100})
 }
@@ -456,6 +467,9 @@ func (h *handlers) nightRestoreShowGain(ctx context.Context, now time.Time, rec 
 // nightLightsFadeInDark sets the gain to 0 before the resting playlist starts
 // after a show, so the fade-in rises from dark. It is tried once.
 func (h *handlers) nightLightsFadeInDark(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) {
+	if nightRenderFadeInMs(payload) != nil {
+		h.nightRenderFade(ctx, now, rec, "dark", 0, time.Time{}, time.Time{}, 0)
+	}
 	if payload.LightsFadeInMs == nil {
 		return
 	}
@@ -465,6 +479,9 @@ func (h *handlers) nightLightsFadeInDark(ctx context.Context, now time.Time, rec
 // nightLightsFadeIn starts the fade-in once the resting start is dispatched,
 // after the dim to 0 has settled, and retries until it lands.
 func (h *handlers) nightLightsFadeIn(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) {
+	if ms := nightRenderFadeInMs(payload); ms != nil {
+		h.nightRenderFade(ctx, now, rec, "in", 100, time.Time{}, time.Time{}, int64(*ms))
+	}
 	if payload.LightsFadeInMs == nil {
 		return
 	}
@@ -478,6 +495,9 @@ func (h *handlers) nightLightsFadeIn(ctx context.Context, now time.Time, rec sto
 // fade was left half done: an abandoned transition, a degraded session, the
 // end of a night and the next pre-show. It never runs on an emergency stop.
 func (h *handlers) nightLightsRestore(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload, why string) {
+	if nightRenderFadesConfigured(payload) {
+		h.nightRenderFade(ctx, now, rec, "restore-"+why, 100, time.Time{}, time.Time{}, 0)
+	}
 	h.nightLightsStart(ctx, now, rec, payload, nightLightsStep{step: nightLightsStepRestore + "-" + why, target: 100})
 }
 

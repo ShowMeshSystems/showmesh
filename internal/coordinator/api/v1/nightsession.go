@@ -193,6 +193,8 @@ type ConfigNightSession struct {
 	Interlocks                []ConfigNightSessionInterlock     `json:"interlocks,omitempty"`
 	LightsFadeOutMs           *int                              `json:"lightsFadeOutMs,omitempty"`
 	LightsFadeInMs            *int                              `json:"lightsFadeInMs,omitempty"`
+	RenderFadeOutMs           *int                              `json:"renderFadeOutMs,omitempty"`
+	RenderFadeInMs            *int                              `json:"renderFadeInMs,omitempty"`
 	FadeOutNightMs            *int                              `json:"fadeOutNightMs,omitempty"`
 }
 
