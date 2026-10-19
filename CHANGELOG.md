@@ -11,6 +11,38 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+## 0.5.1 - 2026-10-18
+
+Patch release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
+matching plugin. Upgrade the coordinator, the operator UI and every node agent
+together; the plugin needs no change.
+
+### Night and show control
+
+- The first show of the night fades the lights out of pre-show's resting
+  sequence, the same as every later show. It used to cut hard from the resting
+  look into the first show whenever a lights fade-out was set.
+- A changed cue list reaches its node by itself between shows while FPP is
+  idle. It used to wait for the operator to press Deploy.
+- Show Night shows Sent as soon as a night command goes out, and Run readiness
+  shows the readiness result, such as Passed with a warning, in place of
+  Accepted.
+- Readiness no longer reports Passed with a warning on every night with a
+  lights fade. The fade checks name the fade and pass; the fade-length check
+  still warns when the fades do not fit in the resting sequence.
+
+### Audio
+
+- A node that plays a cue's audio but renders none of it starts the audio on
+  FPP's MultiSync START. It used to start every song late from the
+  coordinator's fallback. Night readiness warns when a cue's audio has no FPP
+  sequence to start on.
+
+### Clock
+
+- A node acting as its PTP grandmaster no longer reports a stale clock offset
+  left over from when it followed another clock.
+
 ## 0.5.0 - 2026-10-17
 
 Feature release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
