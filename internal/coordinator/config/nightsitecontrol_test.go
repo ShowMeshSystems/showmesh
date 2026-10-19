@@ -13,10 +13,29 @@ func withTopLevelFragment(base, fragment string) string {
 	return strings.TrimSuffix(base, "}") + "," + fragment + "}"
 }
 
-func decodeWithSiteControlFragment(t *testing.T, fragment string) (NightSessionPayload, *ValidationError) {
+// legacySiteControlDecode is what the legacy decoder made of a siteControl
+// fragment, before it is translated into site actions.
+type legacySiteControlDecode struct {
+	SiteControl *NightSiteControl
+	SiteActions *NightSiteActions
+}
+
+func decodeWithSiteControlFragment(t *testing.T, fragment string) (legacySiteControlDecode, *ValidationError) {
 	t.Helper()
 	raw := withTopLevelFragment(validNightSessionJSON, `"siteControl":`+fragment)
-	return DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent, alwaysTrueAudioNodeExists, nil)
+	if verr != nil {
+		return legacySiteControlDecode{}, verr
+	}
+	top, terr := decodeTopLevelObject(raw)
+	if terr != nil {
+		t.Fatalf("decode top level: %+v", terr)
+	}
+	sc, scErr := decodeNightSiteControl(top, p.Show, alwaysTrueActionResolver)
+	if scErr != nil {
+		return legacySiteControlDecode{}, scErr
+	}
+	return legacySiteControlDecode{SiteControl: sc, SiteActions: p.SiteActions}, nil
 }
 
 func decodeWithInterlocksFragment(t *testing.T, fragment string) (NightSessionPayload, *ValidationError) {
@@ -29,8 +48,8 @@ func decodeWithInterlocksFragment(t *testing.T, fragment string) (NightSessionPa
 
 func TestSiteControlOmittedIsNilNotZeroValue(t *testing.T) {
 	p := decodeValidNightSession(t)
-	if p.SiteControl != nil {
-		t.Fatalf("expected a nil SiteControl when siteControl is omitted, got %+v", p.SiteControl)
+	if p.SiteActions != nil {
+		t.Fatalf("expected nil SiteActions when both blocks are omitted, got %+v", p.SiteActions)
 	}
 	if p.Interlocks != nil {
 		t.Fatalf("expected nil Interlocks when interlocks is omitted, got %+v", p.Interlocks)
@@ -436,8 +455,8 @@ func TestInterlockSignalUnresolvableRejected(t *testing.T) {
 // fields empty, never a degraded or partially-decoded result.
 func TestNightSessionRunsUnchangedWithoutSiteControlOrInterlocks(t *testing.T) {
 	p := decodeValidNightSession(t)
-	if p.SiteControl != nil || len(p.Interlocks) != 0 {
-		t.Fatalf("expected no site control and no interlocks on the reference installation's own shape, got siteControl=%+v interlocks=%+v", p.SiteControl, p.Interlocks)
+	if p.SiteActions != nil || len(p.Interlocks) != 0 {
+		t.Fatalf("expected no site actions and no interlocks on the reference installation's own shape, got siteActions=%+v interlocks=%+v", p.SiteActions, p.Interlocks)
 	}
 	if p.Show == "" || p.Resting.Playlist == "" {
 		t.Fatalf("expected the rest of the payload to decode normally: %+v", p)

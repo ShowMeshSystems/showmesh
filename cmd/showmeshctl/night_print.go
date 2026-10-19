@@ -72,7 +72,7 @@ func printNightSessionDetail(w io.Writer, resp nightSessionConfigResponse) {
 
 	printNightSessionLightsFades(w, p)
 
-	printNightSessionSiteControl(w, p.SiteControl)
+	printNightSessionSiteActions(w, p.SiteActions)
 	printNightSessionInterlocks(w, p.Interlocks)
 }
 
@@ -99,46 +99,31 @@ func printNightSessionLightsFades(w io.Writer, p nightSession) {
 	}
 }
 
-// printNightSessionSiteControl renders night.session.siteControl
-// (RESTING-MODE.md §10.2/§10.4, Track F seam F6): "(not configured)"
-// when the deployment omits the whole block, per RESTING-MODE.md §10's
-// own opening line.
-func printNightSessionSiteControl(w io.Writer, sc *nightSessionSiteControl) {
-	_, _ = fmt.Fprintf(w, "\nSite control:")
-	if sc == nil {
-		_, _ = fmt.Fprintf(w, " (not configured)\n")
+// printNightSessionSiteActions renders night.session.siteActions (ADR-065).
+func printNightSessionSiteActions(w io.Writer, a *nightSessionSiteActions) {
+	_, _ = fmt.Fprintf(w, "\nSite actions:")
+	if a == nil {
+		_, _ = fmt.Fprintf(w, " (not configured; power down runs every site sequence)\n")
 		return
 	}
 	_, _ = fmt.Fprintln(w)
-	if sc.RequestThermalProfile != "" {
-		_, _ = fmt.Fprintf(w, "  Thermal profile action: %s\n", sc.RequestThermalProfile)
-	}
-	if sc.PresentationPowerOn == nil {
-		_, _ = fmt.Fprintf(w, "  Presentation power-on:  (not configured)\n")
+	_, _ = fmt.Fprintf(w, "  Prepare site: %s\n", listOrNone(a.PrepareSite))
+	if a.PowerDown == nil {
+		_, _ = fmt.Fprintf(w, "  Power down:   every site sequence\n")
 	} else {
-		b := sc.PresentationPowerOn
-		_, _ = fmt.Fprintf(w, "  Presentation power-on:  action=%s domain=%s provenance=%s\n", b.Action, b.PowerDomain, b.DomainProvenance)
-	}
-	if sc.PresentationPowerOff == nil {
-		_, _ = fmt.Fprintf(w, "  Presentation power-off: (not configured)\n")
-		return
-	}
-	off := sc.PresentationPowerOff
-	_, _ = fmt.Fprintf(w, "  Presentation power-off: action=%s domain=%s provenance=%s removalPolicy=%s\n",
-		off.Action, off.PowerDomain, off.DomainProvenance, off.RemovalPolicy)
-	if off.RemovalPolicy == "immediate" {
-		_, _ = fmt.Fprintf(w, "    immediateSafeAttestation: %v\n", off.ImmediateSafeAttestation)
-		return
-	}
-	_, _ = fmt.Fprintf(w, "    prerequisites (%d):\n", len(off.Prerequisites))
-	for _, p := range off.Prerequisites {
-		switch p.Kind {
-		case "delay":
-			_, _ = fmt.Fprintf(w, "      - delay: %dms\n", p.DelayMs)
-		default:
-			_, _ = fmt.Fprintf(w, "      - %s: action=%s requireConfirmation=%v\n", p.Kind, p.Action, p.RequireConfirmation)
+		_, _ = fmt.Fprintf(w, "  Power down:   every site sequence except %s\n", listOrNone(a.PowerDown.SkipSequences))
+		for _, seq := range a.PowerDown.AdditionalSequences {
+			_, _ = fmt.Fprintf(w, "    night sequence %s (%s): %d steps\n", seq.ID, seq.Label, len(seq.Steps))
 		}
 	}
+	_, _ = fmt.Fprintf(w, "  End session:  %s\n", listOrNone(a.EndSession))
+}
+
+func listOrNone(items []string) string {
+	if len(items) == 0 {
+		return "none"
+	}
+	return strings.Join(items, ", ")
 }
 
 // printNightSessionInterlocks renders night.session.interlocks

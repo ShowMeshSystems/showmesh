@@ -22,7 +22,7 @@ func TestNightFadeLayerTargetTakesTheDurationFromTheTransition(t *testing.T) {
 		{"enter show follows the lights fade-out", config.NightSessionCue{}, nightPhaseEnterShow, 2000},
 		{"fade out night follows the lights fade-out", config.NightSessionCue{}, nightPhaseFadeOut, 2000},
 		{"enter resting follows the lights fade-in", config.NightSessionCue{}, nightPhaseEnterResting, 3000},
-		{"no lights fade keeps the action's own time", config.NightSessionCue{}, nightPhasePowerOffAction, 500},
+		{"no lights fade keeps the action's own time", config.NightSessionCue{}, nightPhaseShutdownStep, 500},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

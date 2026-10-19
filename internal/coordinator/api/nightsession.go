@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -212,6 +213,11 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if nightSessionBodyHasSiteControl(raw) {
+		writeProblem(w, h.logger, now, invalidParameterProblem("Site control was replaced by site actions. Set prepare-site, power down and end session actions instead."))
+		return
+	}
+
 	endpoints, err := currentFPPEndpoints(r.Context(), h.deps.FPP)
 	if err != nil {
 		h.writeInternalError(w, now, "list fpp instances for night.session validation", err)
@@ -380,7 +386,7 @@ func mapConfigNightSession(p config.NightSessionPayload) v1.ConfigNightSession {
 		EnterResting:              v1.ConfigNightSessionEnterResting{Cues: mapConfigNightSessionCues(p.EnterResting.Cues), BlackoutAfterShowMs: p.EnterResting.BlackoutAfterShowMs},
 		EnterEndOfNight:           mapConfigNightSessionEnterEndOfNight(p),
 		AnnouncementDefaultPolicy: p.AnnouncementDefaultPolicy,
-		SiteControl:               mapConfigNightSessionSiteControl(p.SiteControl),
+		SiteActions:               mapConfigNightSessionSiteActions(p.SiteActions),
 		Interlocks:                mapConfigNightSessionInterlocks(p.Interlocks),
 		LightsFadeOutMs:           p.LightsFadeOutMs,
 		LightsFadeInMs:            p.LightsFadeInMs,
@@ -390,38 +396,15 @@ func mapConfigNightSession(p config.NightSessionPayload) v1.ConfigNightSession {
 	}
 }
 
-func mapConfigNightSessionPowerBinding(b config.NightPowerBinding) v1.ConfigNightSessionPowerBinding {
-	return v1.ConfigNightSessionPowerBinding{Action: b.Action, PowerDomain: b.PowerDomain, DomainProvenance: b.DomainProvenance}
-}
-
-func mapConfigNightSessionPrerequisites(prereqs []config.NightPrerequisite) []v1.ConfigNightSessionPrerequisite {
-	if prereqs == nil {
+func mapConfigNightSessionSiteActions(a *config.NightSiteActions) *v1.ConfigNightSessionSiteActions {
+	if a == nil {
 		return nil
 	}
-	out := make([]v1.ConfigNightSessionPrerequisite, 0, len(prereqs))
-	for _, p := range prereqs {
-		out = append(out, v1.ConfigNightSessionPrerequisite{
-			Kind: p.Kind, Action: p.Action, RequireConfirmation: p.RequireConfirmation, DelayMs: p.DelayMs,
-		})
-	}
-	return out
-}
-
-func mapConfigNightSessionSiteControl(sc *config.NightSiteControl) *v1.ConfigNightSessionSiteControl {
-	if sc == nil {
-		return nil
-	}
-	out := &v1.ConfigNightSessionSiteControl{RequestThermalProfile: sc.RequestThermalProfile}
-	if sc.PresentationPowerOn != nil {
-		binding := mapConfigNightSessionPowerBinding(*sc.PresentationPowerOn)
-		out.PresentationPowerOn = &binding
-	}
-	if sc.PresentationPowerOff != nil {
-		off := sc.PresentationPowerOff
-		out.PresentationPowerOff = &v1.ConfigNightSessionPresentationPowerOff{
-			Action: off.Action, PowerDomain: off.PowerDomain, DomainProvenance: off.DomainProvenance,
-			RemovalPolicy: off.RemovalPolicy, ImmediateSafeAttestation: off.ImmediateSafeAttestation,
-			Prerequisites: mapConfigNightSessionPrerequisites(off.Prerequisites),
+	out := &v1.ConfigNightSessionSiteActions{PrepareSite: a.PrepareSite, EndSession: a.EndSession}
+	if a.PowerDown != nil {
+		out.PowerDown = &v1.ConfigNightSessionPowerDown{SkipSequences: a.PowerDown.SkipSequences}
+		if len(a.PowerDown.AdditionalSequences) > 0 {
+			out.PowerDown.AdditionalSequences = mapShutdownSequences(a.PowerDown.AdditionalSequences)
 		}
 	}
 	return out
@@ -598,4 +581,15 @@ func mapNightSessionActiveConfigResponse(now time.Time, rev store.ConfigRevision
 		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
 		Source:                 rev.Source,
 	}
+}
+
+// nightSessionBodyHasSiteControl reports a write still using the block
+// ADR-065 replaced. Stored revisions with it are still read.
+func nightSessionBodyHasSiteControl(raw []byte) bool {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(raw, &top) != nil {
+		return false
+	}
+	_, has := top["siteControl"]
+	return has
 }

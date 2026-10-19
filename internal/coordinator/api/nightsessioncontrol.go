@@ -806,6 +806,7 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 	// succeeded.
 	if err == nil && problem == nil && out.outcome == nightOutcomeApplied {
 		h.nightResetAnnouncementSessionsAtPrepareSite(ctx, now, out.result, newEpochPayload)
+		h.nightRunPrepareSiteActions(ctx, out.result, newEpochPayload)
 	}
 	if err == nil && problem == nil && stopFPPPlayback {
 		// Only a prepare-site that actually prepared the night may stop
@@ -1486,10 +1487,11 @@ func (h *handlers) nightPowerDownPresentationApply(ctx context.Context, tx *stor
 		}
 	}
 	if next.State == nightStateStopped && next.PowerPhase == "" {
-		phase := "not_configured"
-		if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, next); err == nil &&
-			payload.SiteControl != nil && payload.SiteControl.PresentationPowerOff != nil {
-			phase = nightPowerPhaseConfiguredNotDispatched
+		phase := nightShutdownPowerPhaseNotConfigured
+		if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, next); err == nil {
+			if global, gerr := sitePowerSequencesTx(ctx, tx); gerr == nil && len(payload.SiteActions.PowerDownSequences(global)) > 0 {
+				phase = nightPowerPhaseConfiguredNotDispatched
+			}
 		}
 		next.PowerPhase = phase
 		changed = true

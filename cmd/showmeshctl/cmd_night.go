@@ -226,7 +226,7 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 		_, _ = fmt.Fprintln(stderr, "This is a FULL REPLACEMENT: an omitted optional block (e.g.")
 		_, _ = fmt.Fprintln(stderr, "backgroundAudio) is left out entirely, never wiped by an absent key on")
 		_, _ = fmt.Fprintln(stderr, "top of a required one. Validated before activation: a calendar field, a")
-		_, _ = fmt.Fprintln(stderr, "hand-entered rest duration, a siteControl/interlocks block, a dangling or")
+		_, _ = fmt.Fprintln(stderr, "hand-entered rest duration, a siteActions/interlocks block, a dangling or")
 		_, _ = fmt.Fprintln(stderr, "cross-show asset/action reference, or a negative duration field")
 		_, _ = fmt.Fprintln(stderr, "(blackoutHoldMs, blackoutAfterShowMs, fadeDurationMs, crossfadeMs,")
 		_, _ = fmt.Fprintln(stderr, "lightsFadeOutMs, lightsFadeInMs) is")

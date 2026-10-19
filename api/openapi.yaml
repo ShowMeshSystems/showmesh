@@ -8845,7 +8845,7 @@ paths:
         Requires `config:write` (admin only). FPP alone authorizes and
         schedules a night session (ADR-038): a calendar field or a
         hand-entered rest-duration field anywhere in the payload is
-        rejected. `siteControl`/`interlocks` (RESTING-MODE.md §10) are
+        rejected. `siteActions` (ADR-065) and `interlocks` (RESTING-MODE.md §10) are
         accepted on write, returned on read, and enforced against a
         lifecycle command - the whole block's absence is valid and is
         NOT degraded. showPlaylist.fppInstanceId and
@@ -8908,7 +8908,7 @@ paths:
         id: the same live-selector exception `deleteShow` gets one kind
         over, since night.session.active is the one live "what is running
         now" pointer a session participates in. Its own action bindings
-        (background audio, resting cue, siteControl/interlocks) name
+        (background audio, resting cue, siteActions/interlocks) name
         show.action ids, not the other direction, so deleting a session
         does not orphan anything downstream; a session naming a
         since-deleted show.action already reports that through the
@@ -22798,100 +22798,48 @@ components:
           type: boolean
         backgroundAudio:
           $ref: "#/components/schemas/ConfigNightSessionBackgroundAudioWrite"
-    ConfigNightSessionPowerBinding:
+    ConfigNightSessionPowerDown:
       type: object
+      additionalProperties: false
       description: >-
-        A configured power binding under night.session.siteControl
-        (RESTING-MODE.md §10.2, Track F seam F6). action must name an
-        existing show.action object in this session's own show
-        (server-side; not expressible here). domainProvenance
-        "provider" is refused (server-side): no control provider in
-        this build can authoritatively identify a power binding's
-        physical targets, so every binding this build accepts is
-        operator-declared.
-      required: [action, powerDomain, domainProvenance]
+        Which global shutdown sequences this night runs at power down, and
+        its own extra sequences (ADR-065). Skipped ids are global sequence
+        ids; an id that no longer exists is ignored.
       properties:
-        action:
-          type: string
-          minLength: 1
-        powerDomain:
-          type: string
-          enum: [presentation, environmental, mixed, unknown]
-        domainProvenance:
-          type: string
-          enum: [provider, operator-declared]
-    ConfigNightSessionPrerequisite:
-      type: object
-      description: >-
-        One entry of presentationPowerOff.prerequisites, present only
-        when removalPolicy is "after-actions" (RESTING-MODE.md §10.2). A
-        "delay" entry carries delayMs and neither action nor
-        requireConfirmation; an "action" or "evidence" entry carries
-        action and, for "action" only, an optional requireConfirmation.
-        action must not name this same presentation power-off binding's
-        own action, directly or indirectly (server-side; not expressible
-        here).
-      required: [kind]
-      properties:
-        kind:
-          type: string
-          enum: [action, delay, evidence]
-        action:
-          type: string
-          minLength: 1
-        requireConfirmation:
-          type: boolean
-        delayMs:
-          type: integer
-          minimum: 0
-    ConfigNightSessionPresentationPowerOff:
-      type: object
-      description: >-
-        night.session.siteControl.presentationPowerOff (RESTING-MODE.md
-        §10.2). powerDomain must be "presentation" (server-side): this
-        binding is what power-down-presentation invokes, and every other
-        domain is refused rather than guessed. removalPolicy "immediate"
-        requires immediateSafeAttestation: true and forbids
-        prerequisites; "after-actions" requires a non-empty prerequisites
-        list and forbids immediateSafeAttestation (server-side; that
-        either/or is not expressible in this schema alone).
-      required: [action, powerDomain, domainProvenance, removalPolicy]
-      properties:
-        action:
-          type: string
-          minLength: 1
-        powerDomain:
-          type: string
-          enum: [presentation, environmental, mixed, unknown]
-        domainProvenance:
-          type: string
-          enum: [provider, operator-declared]
-        removalPolicy:
-          type: string
-          enum: [immediate, after-actions]
-        immediateSafeAttestation:
-          type: boolean
-        prerequisites:
+        skipSequences:
           type: array
           items:
-            $ref: "#/components/schemas/ConfigNightSessionPrerequisite"
-    ConfigNightSessionSiteControl:
+            type: string
+            pattern: "^[a-z0-9][a-z0-9-]{0,63}$"
+        additionalSequences:
+          type: array
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/ConfigShutdownSequence"
+    ConfigNightSessionSiteActions:
       type: object
+      additionalProperties: false
       description: >-
-        night.session.siteControl (RESTING-MODE.md §10.2/§10.4, ADR-016,
-        Track F seam F6): entirely optional, and every field within it is
-        independently optional too; an empty object is refused
-        (server-side) as configuration nothing enforces.
-        requestThermalProfile, when present, names an existing
-        show.action object in this session's own show (server-side).
+        night.session.siteActions (ADR-065). Every field is optional and
+        every action must belong to this session's own show.
+        `prepareSite` runs once per new preparation, `endSession` runs when
+        the night reaches stopped after its power down, or when it is ended
+        without one, and never after a hard stop. Replaces `siteControl`,
+        which a write is refused for; stored revisions that still carry it
+        read back translated.
       properties:
-        requestThermalProfile:
-          type: string
-          minLength: 1
-        presentationPowerOn:
-          $ref: "#/components/schemas/ConfigNightSessionPowerBinding"
-        presentationPowerOff:
-          $ref: "#/components/schemas/ConfigNightSessionPresentationPowerOff"
+        prepareSite:
+          type: array
+          maxItems: 32
+          items:
+            type: string
+        powerDown:
+          $ref: "#/components/schemas/ConfigNightSessionPowerDown"
+        endSession:
+          type: array
+          maxItems: 32
+          items:
+            type: string
     ConfigNightSessionInterlock:
       type: object
       description: >-
@@ -22967,7 +22915,7 @@ components:
         ConfigNightSession shape, never this one - matching
         ConfigShowWrite/ConfigShow's existing precedent one kind over.
         Every validation rule ConfigNightSession's own description states
-        (the calendar/duration key ban, siteControl/interlocks validation,
+        (the calendar/duration key ban, siteActions/interlocks validation,
         the same-show rule) applies identically here.
       required: [show, label, showPlaylist, resting, enterShow, enterResting]
       properties:
@@ -22993,8 +22941,8 @@ components:
           description: >-
             Defaults to "duck" when absent. Used by any announcement-role
             cue that does not name its own announcementPolicy.
-        siteControl:
-          $ref: "#/components/schemas/ConfigNightSessionSiteControl"
+        siteActions:
+          $ref: "#/components/schemas/ConfigNightSessionSiteActions"
         interlocks:
           type: array
           items:
@@ -23059,12 +23007,12 @@ components:
         (server-side; not expressible in this schema) - this is a rule
         about field NAMES, not values, so an operator-authored label or
         action id that happens to contain a date or a time of day is an
-        ordinary string, not a violation. `siteControl` and `interlocks`
+        ordinary string, not a violation. `siteActions` and `interlocks`
         are entirely optional (RESTING-MODE.md §10's own opening line: a
         deployment that omits both runs the whole night loop unchanged).
         Every cross-object reference this object carries (cue actions,
         the resting timeline asset, every backgroundAudio item, every
-        siteControl action, every interlock signal) must belong to this
+        siteActions action, every interlock signal) must belong to this
         session's own `show` (ADR-027: a Show is a namespace).
       required:
         [show, label, showPlaylist, resting, enterShow, enterResting,
@@ -23089,8 +23037,8 @@ components:
         announcementDefaultPolicy:
           type: string
           enum: [duck, mix, interrupt]
-        siteControl:
-          $ref: "#/components/schemas/ConfigNightSessionSiteControl"
+        siteActions:
+          $ref: "#/components/schemas/ConfigNightSessionSiteActions"
         interlocks:
           type: array
           items:

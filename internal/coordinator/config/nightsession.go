@@ -160,7 +160,7 @@ var nightSessionDurationKeys = map[string]bool{
 var nightSessionTopLevelKeys = map[string]bool{
 	"show": true, "label": true, "showPlaylist": true, "resting": true,
 	"enterShow": true, "enterResting": true, "enterEndOfNight": true, "announcementDefaultPolicy": true,
-	"siteControl": true, "interlocks": true,
+	"siteControl": true, "siteActions": true, "interlocks": true,
 	"lightsFadeOutMs": true, "lightsFadeInMs": true, "fadeOutNightMs": true,
 	"renderFadeOutMs": true, "renderFadeInMs": true,
 }
@@ -203,7 +203,7 @@ type NightSessionPayload struct {
 	// blocks (nightsitecontrol.go, RESTING-MODE.md §10). Both are nil/empty
 	// on a deployment that omits them, and the rest of the night loop runs
 	// unchanged in that case (RESTING-MODE.md §10's own opening line).
-	SiteControl *NightSiteControl    `json:"siteControl,omitempty"`
+	SiteActions *NightSiteActions    `json:"siteActions,omitempty"`
 	Interlocks  []NightInterlockRule `json:"interlocks,omitempty"`
 
 	// LightsFadeOutMs finishes as the resting sequence ends before a show;
@@ -705,7 +705,7 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		return NightSessionPayload{}, verr
 	}
 
-	siteControl, verr := decodeNightSiteControl(top, show, actionResolver)
+	siteActions, verr := decodeNightSiteActions(top, show, actionResolver)
 	if verr != nil {
 		return NightSessionPayload{}, verr
 	}
@@ -752,7 +752,7 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		Show: show, Label: label, ShowPlaylist: showPlaylist, Resting: resting,
 		EnterShow: enterShow, EnterResting: enterResting, EnterEndOfNight: enterEndOfNight,
 		AnnouncementDefaultPolicy: announcementDefaultPolicy,
-		SiteControl:               siteControl,
+		SiteActions:               siteActions,
 		Interlocks:                interlocks,
 		LightsFadeOutMs:           lightsFadeOutMs,
 		LightsFadeInMs:            lightsFadeInMs,

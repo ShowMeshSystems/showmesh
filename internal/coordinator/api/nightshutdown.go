@@ -222,9 +222,10 @@ func (h *handlers) nightReachStopped(ctx context.Context, now time.Time, rec sto
 	// held across the store's single connection alongside a write.
 	powerPhase := nightShutdownPowerPhaseNotConfigured
 	if rec.ShutdownIntent == "power-down" {
-		if payload, err := h.getPinnedNightSessionPayload(ctx, rec); err == nil &&
-			payload.SiteControl != nil && payload.SiteControl.PresentationPowerOff != nil {
-			powerPhase = nightPowerPhaseConfiguredNotDispatched
+		if payload, err := h.getPinnedNightSessionPayload(ctx, rec); err == nil {
+			if seqs, serr := h.nightPowerDownSequences(ctx, payload); serr == nil && len(seqs) > 0 {
+				powerPhase = nightPowerPhaseConfiguredNotDispatched
+			}
 		}
 	}
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {

@@ -61,6 +61,7 @@ vi.mock('../api', async () => {
   return {
     ...actual,
     getCurrentNightSession: () => new Promise(() => {}),
+    getSitePowerConfig: () => Promise.resolve({ serverTime: '', kind: 'show.sitepower', revision: 1, updatedAt: '', createdByPrincipalId: null, createdByPrincipalName: null, source: 'api', payload: { shutdownSequences: [{ id: 'fm', label: 'FM transmitter', steps: [{ delayMs: 1 }] }, { id: 'projectors', label: 'Projectors', steps: [{ delayMs: 1 }] }], powerOnActions: [] } }),
     dispatchNightCommand: (...args: never[]) => stubs.dispatchNightCommand(...args),
     getNightSessionActiveConfig: (...args: never[]) => stubs.getNightSessionActiveConfig(...args),
     putNightSessionActiveConfig: (...args: never[]) => stubs.putNightSessionActiveConfig(...args),
@@ -1306,14 +1307,7 @@ describe('Show Night', () => {
       announcementDefaultPolicy: 'duck',
       lightsFadeOutMs: 20000,
       lightsFadeInMs: 8000,
-      siteControl: {
-        requestThermalProfile: 'winter-thermal',
-        presentationPowerOn: { action: 'power-on', powerDomain: 'presentation', domainProvenance: 'operator-declared' },
-        presentationPowerOff: {
-          action: 'power-off', powerDomain: 'presentation', domainProvenance: 'operator-declared', removalPolicy: 'after-actions',
-          prerequisites: [{ kind: 'delay', delayMs: 5000 }],
-        },
-      },
+      siteActions: { prepareSite: ['power-on'], powerDown: { skipSequences: ['fm'] }, endSession: ['power-off'] },
       interlocks: [
         { name: 'door-sensor', phase: 'prepare-site', posture: 'block', signal: 'door-check', freshnessSeconds: 30, failureText: 'Door not confirmed shut.', onUnavailable: 'block', overridePolicy: 'authorized-operator' },
       ],
@@ -1667,7 +1661,7 @@ describe('Show Night', () => {
     expect(help[1]).toHaveTextContent(/end of the show/)
   })
 
-  it('sends the site control subsection with its authored bindings', async () => {
+  it('sends the site actions with a site sequence turned back on and one turned off', async () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
@@ -1678,13 +1672,14 @@ describe('Show Night', () => {
     }
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    fireEvent.change(screen.getByLabelText('Request thermal profile'), { target: { value: 'summer-thermal' } })
+    const fm = await screen.findByRole('checkbox', { name: 'FM transmitter' })
+    expect(fm).not.toBeChecked()
+    fireEvent.click(fm)
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Projectors' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge')
-    const siteControl = captured.body?.siteControl as Record<string, unknown>
-    expect(siteControl.requestThermalProfile).toBe('summer-thermal')
-    expect(siteControl.presentationPowerOn).toMatchObject({ action: 'power-on', powerDomain: 'presentation', domainProvenance: 'operator-declared' })
-    expect(siteControl.presentationPowerOff).toMatchObject({ action: 'power-off', removalPolicy: 'after-actions', prerequisites: [{ kind: 'delay', delayMs: 5000 }] })
+    expect(captured.body?.siteControl).toBeUndefined()
+    expect(captured.body?.siteActions).toEqual({ prepareSite: ['power-on'], endSession: ['power-off'], powerDown: { skipSequences: ['projectors'] } })
   })
 
   it('sends interlocks with an edited entry', async () => {

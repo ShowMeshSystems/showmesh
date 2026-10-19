@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { SitePowerTesting } from './SitePowerTesting'
+import { ShutdownSequenceEditor } from './ShutdownSequenceEditor'
+import { sequencesProblem } from './shutdownSequenceModel'
 import {
   ApiError,
   PROBLEM_TYPE,
@@ -35,6 +37,8 @@ import {
   type NightSessionActiveConfigResponse,
   type NightSessionConfigResponse,
   type NightSessionState,
+  getSitePowerConfig,
+  type ConfigShutdownSequence,
 } from '../api'
 import {
   BlankingPlate,
@@ -61,6 +65,7 @@ import {
   Table,
   TableWrap,
   Workbench,
+  ActionList,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { RESUME_CONFIRM_TITLE, useResumeShow } from '../app/stopHold'
@@ -922,20 +927,11 @@ type BackgroundAudioDraft = {
   excludeNodes: string[]
 }
 
-type PrerequisiteDraft = { kind: 'action' | 'delay' | 'evidence'; action: string; requireConfirmation: boolean; delayMs: string }
-type SiteControlDraft = {
-  requestThermalProfile: string
-  powerOnEnabled: boolean
-  powerOnAction: string
-  powerOnDomain: 'presentation' | 'environmental' | 'mixed' | 'unknown'
-  powerOnProvenance: 'provider' | 'operator-declared'
-  powerOffEnabled: boolean
-  powerOffAction: string
-  powerOffDomain: 'presentation' | 'environmental' | 'mixed' | 'unknown'
-  powerOffProvenance: 'provider' | 'operator-declared'
-  removalPolicy: 'immediate' | 'after-actions'
-  immediateSafeAttestation: boolean
-  prerequisites: PrerequisiteDraft[]
+type SiteActionsDraft = {
+  prepareSite: string[]
+  skipSequences: string[]
+  additionalSequences: ConfigShutdownSequence[]
+  endSession: string[]
 }
 
 type InterlockDraft = {
@@ -973,7 +969,7 @@ type DefinitionDraft = {
   timelineTarget: string
   announcementDefaultPolicy: 'duck' | 'mix' | 'interrupt'
   backgroundAudio: BackgroundAudioDraft
-  siteControl: SiteControlDraft
+  siteActions: SiteActionsDraft
   interlocks: InterlockDraft[]
   blackoutHoldMs: string
   blackoutAfterShowMs: string
@@ -997,10 +993,6 @@ const ANNOUNCEMENT_POLICIES = ['duck', 'mix', 'interrupt'] as const
 const BACKGROUND_AUDIO_REPEATS = ['none', 'item', 'playlist'] as const
 const BACKGROUND_AUDIO_RESUMES = ['resume', 'restart'] as const
 const BACKGROUND_AUDIO_TRANSITIONS = ['sequential', 'gapless', 'crossfade'] as const
-const POWER_DOMAINS = ['presentation', 'environmental', 'mixed', 'unknown'] as const
-const DOMAIN_PROVENANCES = ['provider', 'operator-declared'] as const
-const REMOVAL_POLICIES = ['immediate', 'after-actions'] as const
-const PREREQUISITE_KINDS = ['action', 'delay', 'evidence'] as const
 const INTERLOCK_PHASES = [
   'prepare-site', 'presentation-power-on', 'projector-strike', 'run-readiness',
   'start-preshow', 'start-night', 'enter-resting', 'fade-out-night', 'power-down-presentation',
@@ -1038,18 +1030,12 @@ function mediaPlaylistOptions(reported: readonly ConfigObjectSummary[], retained
   if (retained !== '' && !options.some((option) => option.id === retained)) options.push({ id: retained, label: retained })
   return options
 }
-const blankPrerequisite = (): PrerequisiteDraft => ({ kind: 'action', action: '', requireConfirmation: false, delayMs: '' })
-const blankSiteControl = (): SiteControlDraft => ({
-  requestThermalProfile: '',
-  powerOnEnabled: false, powerOnAction: '', powerOnDomain: 'presentation', powerOnProvenance: 'operator-declared',
-  powerOffEnabled: false, powerOffAction: '', powerOffDomain: 'presentation', powerOffProvenance: 'operator-declared',
-  removalPolicy: 'immediate', immediateSafeAttestation: false, prerequisites: [],
-})
+const blankSiteActions = (): SiteActionsDraft => ({ prepareSite: [], skipSequences: [], additionalSequences: [], endSession: [] })
 const blankInterlock = (): InterlockDraft => ({ name: '', phase: 'prepare-site', posture: 'observe', signal: '', freshnessSeconds: '', failureText: '', onUnavailable: 'block', overridePolicy: 'none' })
 const blankDefinition = (show = ''): DefinitionDraft => ({
   id: '', show, label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '',
   timelineShow: show, timelineSequence: '', timelineTarget: '', endOfNightPlaylist: '', endOfNightRepeat: false,
-  announcementDefaultPolicy: 'duck', backgroundAudio: blankBackgroundAudio(), siteControl: blankSiteControl(), interlocks: [],
+  announcementDefaultPolicy: 'duck', backgroundAudio: blankBackgroundAudio(), siteActions: blankSiteActions(), interlocks: [],
   blackoutHoldMs: '0', blackoutAfterShowMs: '0', lightsFadeOutMs: '', lightsFadeInMs: '', fadeOutNightMs: '', renderFadeOutMs: '', renderFadeInMs: '',
   enterShow: [], enterResting: [], endOfNightMode: 'resting', endOfNightBlackoutMs: '', enterEndOfNight: [], base: null,
 })
@@ -1080,24 +1066,11 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
             targets: bg.targets ?? [],
             excludeNodes: readBackgroundAudioExcludeNodes(bg),
           }
-  const powerOn = payload.siteControl?.presentationPowerOn
-  const powerOff = payload.siteControl?.presentationPowerOff
-  const siteControl: SiteControlDraft = {
-    requestThermalProfile: payload.siteControl?.requestThermalProfile ?? '',
-    powerOnEnabled: powerOn !== undefined,
-    powerOnAction: powerOn?.action ?? '',
-    powerOnDomain: powerOn?.powerDomain ?? 'presentation',
-    powerOnProvenance: powerOn?.domainProvenance ?? 'operator-declared',
-    powerOffEnabled: powerOff !== undefined,
-    powerOffAction: powerOff?.action ?? '',
-    powerOffDomain: powerOff?.powerDomain ?? 'presentation',
-    powerOffProvenance: powerOff?.domainProvenance ?? 'operator-declared',
-    removalPolicy: powerOff?.removalPolicy ?? 'immediate',
-    immediateSafeAttestation: powerOff?.immediateSafeAttestation ?? false,
-    prerequisites: (powerOff?.prerequisites ?? []).map((p) => ({
-      kind: p.kind, action: p.action ?? '', requireConfirmation: p.requireConfirmation ?? false,
-      delayMs: p.delayMs === undefined ? '' : String(p.delayMs),
-    })),
+  const siteActions: SiteActionsDraft = {
+    prepareSite: payload.siteActions?.prepareSite ?? [],
+    skipSequences: payload.siteActions?.powerDown?.skipSequences ?? [],
+    additionalSequences: payload.siteActions?.powerDown?.additionalSequences ?? [],
+    endSession: payload.siteActions?.endSession ?? [],
   }
   const interlocks: InterlockDraft[] = (payload.interlocks ?? []).map((i) => ({
     name: i.name, phase: i.phase, posture: i.posture, signal: i.signal ?? '',
@@ -1109,7 +1082,7 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
     showFpp: payload.showPlaylist.fppInstanceId, showPlaylist: payload.showPlaylist.playlist,
     restingFpp: payload.resting.fppInstanceId, restingPlaylist: payload.resting.playlist, endOfNightPlaylist: payload.resting.endOfNightPlaylist, endOfNightRepeat: payload.resting.endOfNightRepeat,
     timelineShow: payload.resting.timelineAsset.show, timelineSequence: payload.resting.timelineAsset.sequence, timelineTarget: payload.resting.timelineAsset.target,
-    announcementDefaultPolicy: payload.announcementDefaultPolicy, backgroundAudio, siteControl, interlocks,
+    announcementDefaultPolicy: payload.announcementDefaultPolicy, backgroundAudio, siteActions, interlocks,
     blackoutHoldMs: String(payload.enterShow.blackoutHoldMs), blackoutAfterShowMs: String(payload.enterResting.blackoutAfterShowMs),
     lightsFadeOutMs: payload.lightsFadeOutMs === undefined ? '' : String(payload.lightsFadeOutMs),
     fadeOutNightMs: payload.fadeOutNightMs === undefined ? '' : String(payload.fadeOutNightMs),
@@ -1124,7 +1097,7 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
 }
 
 type BackgroundAudioWrite = ConfigNightSessionBackgroundAudioInlineWriteWithExclude | ConfigNightSessionBackgroundAudioReferenceWriteWithExclude
-type SiteControlWrite = NonNullable<ConfigNightSessionWrite['siteControl']>
+type SiteActionsWrite = NonNullable<ConfigNightSessionWrite['siteActions']>
 type InterlockWrite = NonNullable<ConfigNightSessionWrite['interlocks']>[number]
 
 function buildBackgroundAudio(
@@ -1181,39 +1154,17 @@ function buildBackgroundAudio(
   }
 }
 
-function buildSiteControl(sc: SiteControlDraft): { ok: true; value: SiteControlWrite | undefined } | { ok: false; error: string } {
-  const built: SiteControlWrite = {}
-  if (sc.requestThermalProfile.trim() !== '') built.requestThermalProfile = sc.requestThermalProfile.trim()
-  if (sc.powerOnEnabled) {
-    if (sc.powerOnAction.trim() === '') return { ok: false, error: 'Presentation power-on needs an action.' }
-    built.presentationPowerOn = { action: sc.powerOnAction.trim(), powerDomain: sc.powerOnDomain, domainProvenance: sc.powerOnProvenance }
-  }
-  if (sc.powerOffEnabled) {
-    if (sc.powerOffAction.trim() === '') return { ok: false, error: 'Presentation power down needs an action.' }
-    if (sc.removalPolicy === 'immediate' && !sc.immediateSafeAttestation) {
-      return { ok: false, error: 'Immediate removal needs the safe-to-remove box ticked.' }
-    }
-    if (sc.removalPolicy === 'after-actions' && sc.prerequisites.length === 0) {
-      return { ok: false, error: 'After-actions removal requires at least one prerequisite.' }
-    }
-    const prerequisites: NonNullable<SiteControlWrite['presentationPowerOff']>['prerequisites'] = []
-    for (const [index, p] of sc.prerequisites.entries()) {
-      if (p.kind === 'delay') {
-        const delayMs = Number(p.delayMs)
-        if (p.delayMs.trim() === '' || !Number.isInteger(delayMs) || delayMs < 0) {
-          return { ok: false, error: `Prerequisite ${index + 1} needs a whole, non-negative delay in milliseconds.` }
-        }
-        prerequisites.push({ kind: 'delay', delayMs })
-      } else {
-        if (p.action.trim() === '') return { ok: false, error: `Prerequisite ${index + 1} needs an action.` }
-        prerequisites.push({ kind: p.kind, action: p.action.trim(), ...(p.kind === 'action' ? { requireConfirmation: p.requireConfirmation } : {}) })
-      }
-    }
-    built.presentationPowerOff = {
-      action: sc.powerOffAction.trim(), powerDomain: sc.powerOffDomain, domainProvenance: sc.powerOffProvenance, removalPolicy: sc.removalPolicy,
-      ...(sc.removalPolicy === 'immediate' ? { immediateSafeAttestation: true } : {}),
-      ...(sc.removalPolicy === 'after-actions' ? { prerequisites } : {}),
-    }
+function buildSiteActions(sa: SiteActionsDraft): { ok: true; value: SiteActionsWrite | undefined } | { ok: false; error: string } {
+  if (sa.prepareSite.includes('') || sa.endSession.includes('')) return { ok: false, error: 'A site action row has no action. Pick one or remove the row.' }
+  const problem = sequencesProblem(sa.additionalSequences)
+  if (problem !== null) return { ok: false, error: problem }
+  const built: SiteActionsWrite = {}
+  if (sa.prepareSite.length > 0) built.prepareSite = sa.prepareSite
+  if (sa.endSession.length > 0) built.endSession = sa.endSession
+  if (sa.skipSequences.length > 0 || sa.additionalSequences.length > 0) {
+    built.powerDown = {}
+    if (sa.skipSequences.length > 0) built.powerDown.skipSequences = sa.skipSequences
+    if (sa.additionalSequences.length > 0) built.powerDown.additionalSequences = sa.additionalSequences
   }
   return { ok: true, value: Object.keys(built).length === 0 ? undefined : built }
 }
@@ -1285,8 +1236,8 @@ function definitionPayload(
   if (draft.endOfNightMode === 'custom' && enteringEndOfNight.cues.length === 0) return { error: 'Custom end-of-night cues need at least one cue. Add a cue, or choose Run no cues.' }
   const backgroundAudio = buildBackgroundAudio(draft.backgroundAudio, audioAssets, showAudioNodes)
   if (!backgroundAudio.ok) return { error: backgroundAudio.error }
-  const siteControl = buildSiteControl(draft.siteControl)
-  if (!siteControl.ok) return { error: siteControl.error }
+  const siteActions = buildSiteActions(draft.siteActions)
+  if (!siteActions.ok) return { error: siteActions.error }
   const interlocks = buildInterlocks(draft.interlocks)
   if (!interlocks.ok) return { error: interlocks.error }
   const blackoutHoldMs = Number(draft.blackoutHoldMs)
@@ -1340,8 +1291,9 @@ function definitionPayload(
   else result.renderFadeOutMs = renderFadeOutMs
   if (renderFadeInMs === null) delete result.renderFadeInMs
   else result.renderFadeInMs = renderFadeInMs
-  if (siteControl.value === undefined) delete result.siteControl
-  else result.siteControl = siteControl.value
+  delete (result as Record<string, unknown>).siteControl
+  if (siteActions.value === undefined) delete result.siteActions
+  else result.siteActions = siteActions.value
   if (interlocks.value === undefined) delete result.interlocks
   else result.interlocks = interlocks.value
   return result
@@ -1384,6 +1336,19 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const [objects, setObjects] = useState<NightSessionConfigResponse[] | null>(null)
   const [activeId, setActiveId] = useState('')
   const [actions, setActions] = useState<ShowActionConfigResponse[]>([])
+  const [siteSequences, setSiteSequences] = useState<ConfigShutdownSequence[]>([])
+  const nightActionOptions = actions.map((action) => ({ id: action.id, label: action.payload.label }))
+  useEffect(() => {
+    let cancelled = false
+    getSitePowerConfig()
+      .then((cfg) => {
+        if (!cancelled) setSiteSequences(cfg.payload.shutdownSequences)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const [playlistDefinitions, setPlaylistDefinitions] = useState<FPPPlaylistDefinitionMetadata[]>([])
   const [assets, setAssets] = useState<Asset[]>([])
   const [mediaPlaylists, setMediaPlaylists] = useState<ConfigObjectSummary[]>([])
@@ -1467,12 +1432,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const removeBackgroundAudioItem = (index: number) =>
     setDraft((current) => ({ ...current, backgroundAudio: { ...current.backgroundAudio, items: current.backgroundAudio.items.filter((_, itemIndex) => itemIndex !== index) } }))
 
-  const updateSiteControl = (patch: Partial<SiteControlDraft>) => setDraft((current) => ({ ...current, siteControl: { ...current.siteControl, ...patch } }))
-  const updatePrerequisite = (index: number, patch: Partial<PrerequisiteDraft>) =>
-    setDraft((current) => ({ ...current, siteControl: { ...current.siteControl, prerequisites: current.siteControl.prerequisites.map((p, itemIndex) => itemIndex === index ? { ...p, ...patch } : p) } }))
-  const addPrerequisite = () => setDraft((current) => ({ ...current, siteControl: { ...current.siteControl, prerequisites: [...current.siteControl.prerequisites, blankPrerequisite()] } }))
-  const removePrerequisite = (index: number) =>
-    setDraft((current) => ({ ...current, siteControl: { ...current.siteControl, prerequisites: current.siteControl.prerequisites.filter((_, itemIndex) => itemIndex !== index) } }))
+  const updateSiteActions = (patch: Partial<SiteActionsDraft>) => setDraft((current) => ({ ...current, siteActions: { ...current.siteActions, ...patch } }))
 
   const updateInterlock = (index: number, patch: Partial<InterlockDraft>) => setDraft((current) => ({ ...current, interlocks: current.interlocks.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
   const addInterlock = () => setDraft((current) => ({ ...current, interlocks: [...current.interlocks, blankInterlock()] }))
@@ -1633,59 +1593,25 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
             )}
           </div>
           <div className="sm-inspector__group">
-            <h4 className="sm-subsection__title">Site control</h4>
-            <Field label="Request thermal profile" help="The action this site runs.">
-              {(p) => <Input {...p} value={draft.siteControl.requestThermalProfile} onChange={(e) => updateSiteControl({ requestThermalProfile: e.target.value })} />}
-            </Field>
-            <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Presentation power-on</h4></div>
-            <Choice type="checkbox" checked={draft.siteControl.powerOnEnabled} onChange={(e) => updateSiteControl({ powerOnEnabled: e.target.checked })} label="Set a presentation power on action" />
-            {draft.siteControl.powerOnEnabled && (
-              <div className="sm-night-session-compact-grid">
-                <Field label="Action">{(p) => <Input {...p} value={draft.siteControl.powerOnAction} onChange={(e) => updateSiteControl({ powerOnAction: e.target.value })} />}</Field>
-                <Field label="Power domain">{(p) => <Select {...p} value={draft.siteControl.powerOnDomain} onChange={(e) => updateSiteControl({ powerOnDomain: e.target.value as SiteControlDraft['powerOnDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
-                <Field label="Power kind set by" help="Only User declared is accepted here.">
-                  {(p) => <Select {...p} value={draft.siteControl.powerOnProvenance} onChange={(e) => updateSiteControl({ powerOnProvenance: e.target.value as SiteControlDraft['powerOnProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}
-                </Field>
-              </div>
-            )}
-            <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Presentation power down</h4></div>
-            <Choice type="checkbox" checked={draft.siteControl.powerOffEnabled} onChange={(e) => updateSiteControl({ powerOffEnabled: e.target.checked })} label="Set a presentation power down action" />
-            {draft.siteControl.powerOffEnabled && (
-              <>
-                <div className="sm-night-session-compact-grid">
-                  <Field label="Action">{(p) => <Input {...p} value={draft.siteControl.powerOffAction} onChange={(e) => updateSiteControl({ powerOffAction: e.target.value })} />}</Field>
-                  <Field label="Power domain">{(p) => <Select {...p} value={draft.siteControl.powerOffDomain} onChange={(e) => updateSiteControl({ powerOffDomain: e.target.value as SiteControlDraft['powerOffDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
-                  <Field label="Power kind set by">{(p) => <Select {...p} value={draft.siteControl.powerOffProvenance} onChange={(e) => updateSiteControl({ powerOffProvenance: e.target.value as SiteControlDraft['powerOffProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}</Field>
-                  <Field label="Removal policy" help="Immediate needs the confirmation below. After-actions needs a prerequisite.">
-                    {(p) => <Select {...p} value={draft.siteControl.removalPolicy} onChange={(e) => updateSiteControl({ removalPolicy: e.target.value as SiteControlDraft['removalPolicy'] })}>{REMOVAL_POLICIES.map((option) => <option key={option} value={option}>{optionLabel(option)}</option>)}</Select>}
-                  </Field>
-                </div>
-                {draft.siteControl.removalPolicy === 'immediate' && (
-                  <Choice type="checkbox" checked={draft.siteControl.immediateSafeAttestation} onChange={(e) => updateSiteControl({ immediateSafeAttestation: e.target.checked })} label="This power domain is safe to remove immediately" />
-                )}
-                {draft.siteControl.removalPolicy === 'after-actions' && (
-                  <>
-                    {draft.siteControl.prerequisites.map((p, index) => (
-                      <div className="sm-night-session-item" key={`prereq-${index}`}>
-                        <Field label="Kind">{(field) => <Select {...field} value={p.kind} onChange={(e) => updatePrerequisite(index, { kind: e.target.value as PrerequisiteDraft['kind'] })}>{PREREQUISITE_KINDS.map((option) => <option key={option} value={option}>{option === 'evidence' ? 'Signal check' : option}</option>)}</Select>}</Field>
-                        {p.kind === 'delay' ? (
-                          <Field label="Delay (ms)">{(field) => <Input {...field} type="number" min="0" step="1" value={p.delayMs} onChange={(e) => updatePrerequisite(index, { delayMs: e.target.value })} />}</Field>
-                        ) : (
-                          <>
-                            <Field label="Action">{(field) => <Input {...field} value={p.action} onChange={(e) => updatePrerequisite(index, { action: e.target.value })} />}</Field>
-                            {p.kind === 'action' && (
-                              <Choice type="checkbox" checked={p.requireConfirmation} onChange={(e) => updatePrerequisite(index, { requireConfirmation: e.target.checked })} label="Require confirmation" />
-                            )}
-                          </>
-                        )}
-                        <Button variant="quiet" onClick={() => removePrerequisite(index)}>Remove prerequisite</Button>
-                      </div>
-                    ))}
-                    <Button onClick={addPrerequisite}>Add prerequisite</Button>
-                  </>
-                )}
-              </>
-            )}
+            <h4 className="sm-subsection__title">Site actions</h4>
+            <ActionList label="Prepare site" help="Runs once when Prepare site opens a new preparation. Use actions that set a state, so running them again is harmless." value={draft.siteActions.prepareSite} options={nightActionOptions} onChange={(prepareSite) => updateSiteActions({ prepareSite })} />
+            <div className="sm-action-list">
+              <p className="sm-action-list__label">Power down</p>
+              <p className="sm-small sm-muted">Runs at power down, after the show stops. Untick a site sequence to leave it out of this night. Site sequences are set in Settings, Site settings.</p>
+              {siteSequences.length === 0 && <p className="sm-small sm-faint">No site sequences are set up.</p>}
+              {siteSequences.map((seq) => (
+                <Choice
+                  key={seq.id}
+                  type="checkbox"
+                  label={seq.label}
+                  checked={!draft.siteActions.skipSequences.includes(seq.id)}
+                  onChange={(e) => updateSiteActions({ skipSequences: e.target.checked ? draft.siteActions.skipSequences.filter((id) => id !== seq.id) : [...draft.siteActions.skipSequences, seq.id] })}
+                />
+              ))}
+              <p className="sm-small sm-muted">Extra sequences for this night only:</p>
+              <ShutdownSequenceEditor sequences={draft.siteActions.additionalSequences} options={nightActionOptions} takenIds={siteSequences.map((seq) => seq.id)} onChange={(additionalSequences) => updateSiteActions({ additionalSequences })} />
+            </div>
+            <ActionList label="End session" help="Runs when the night stops, after its power down. A hard stop skips these." value={draft.siteActions.endSession} options={nightActionOptions} onChange={(endSession) => updateSiteActions({ endSession })} />
           </div>
           <div className="sm-inspector__group">
             <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Safety checks</h4><Button onClick={addInterlock}>Add safety check</Button></div>

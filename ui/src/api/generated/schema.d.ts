@@ -3056,13 +3056,13 @@ export interface paths {
         get: operations["getNightSession"];
         /**
          * Write a new night.session revision (Track F seam F1)
-         * @description Requires `config:write` (admin only). FPP alone authorizes and schedules a night session (ADR-038): a calendar field or a hand-entered rest-duration field anywhere in the payload is rejected. `siteControl`/`interlocks` (RESTING-MODE.md §10) are accepted on write, returned on read, and enforced against a lifecycle command - the whole block's absence is valid and is NOT degraded. showPlaylist.fppInstanceId and resting.fppInstanceId must name configured FPP instances; resting.timelineAsset and every backgroundAudio item must resolve to a current asset (ADR-028); every cue's action must name an existing show.action object in the same show. This is a FULL REPLACEMENT: an omitted optional block (backgroundAudio) is left unconfigured, never wiped by an absent key on top of a required one. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
+         * @description Requires `config:write` (admin only). FPP alone authorizes and schedules a night session (ADR-038): a calendar field or a hand-entered rest-duration field anywhere in the payload is rejected. `siteActions` (ADR-065) and `interlocks` (RESTING-MODE.md §10) are accepted on write, returned on read, and enforced against a lifecycle command - the whole block's absence is valid and is NOT degraded. showPlaylist.fppInstanceId and resting.fppInstanceId must name configured FPP instances; resting.timelineAsset and every backgroundAudio item must resolve to a current asset (ADR-028); every cue's action must name an existing show.action object in the same show. This is a FULL REPLACEMENT: an omitted optional block (backgroundAudio) is left unconfigured, never wiped by an absent key on top of a required one. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putNightSession"];
         post?: never;
         /**
          * Delete a night.session object (tombstone)
-         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/night.session/{id}/revisions. Excluded immediately from GET/list and from resolution. Refused with `409` when GET /config/night.session.active currently names this session id: the same live-selector exception `deleteShow` gets one kind over, since night.session.active is the one live "what is running now" pointer a session participates in. Its own action bindings (background audio, resting cue, siteControl/interlocks) name show.action ids, not the other direction, so deleting a session does not orphan anything downstream; a session naming a since-deleted show.action already reports that through the existing night-readiness surface, unchanged by this seam. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/night.session/{id}/revisions. Excluded immediately from GET/list and from resolution. Refused with `409` when GET /config/night.session.active currently names this session id: the same live-selector exception `deleteShow` gets one kind over, since night.session.active is the one live "what is running now" pointer a session participates in. Its own action bindings (background audio, resting cue, siteActions/interlocks) name show.action ids, not the other direction, so deleting a session does not orphan anything downstream; a session naming a since-deleted show.action already reports that through the existing night-readiness surface, unchanged by this seam. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
          */
         delete: operations["deleteNightSession"];
         options?: never;
@@ -8241,39 +8241,16 @@ export interface components {
             endOfNightRepeat?: boolean;
             backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudioWrite"];
         };
-        /** @description A configured power binding under night.session.siteControl (RESTING-MODE.md §10.2, Track F seam F6). action must name an existing show.action object in this session's own show (server-side; not expressible here). domainProvenance "provider" is refused (server-side): no control provider in this build can authoritatively identify a power binding's physical targets, so every binding this build accepts is operator-declared. */
-        ConfigNightSessionPowerBinding: {
-            action: string;
-            /** @enum {string} */
-            powerDomain: "presentation" | "environmental" | "mixed" | "unknown";
-            /** @enum {string} */
-            domainProvenance: "provider" | "operator-declared";
+        /** @description Which global shutdown sequences this night runs at power down, and its own extra sequences (ADR-065). Skipped ids are global sequence ids; an id that no longer exists is ignored. */
+        ConfigNightSessionPowerDown: {
+            skipSequences?: string[];
+            additionalSequences?: components["schemas"]["ConfigShutdownSequence"][];
         };
-        /** @description One entry of presentationPowerOff.prerequisites, present only when removalPolicy is "after-actions" (RESTING-MODE.md §10.2). A "delay" entry carries delayMs and neither action nor requireConfirmation; an "action" or "evidence" entry carries action and, for "action" only, an optional requireConfirmation. action must not name this same presentation power-off binding's own action, directly or indirectly (server-side; not expressible here). */
-        ConfigNightSessionPrerequisite: {
-            /** @enum {string} */
-            kind: "action" | "delay" | "evidence";
-            action?: string;
-            requireConfirmation?: boolean;
-            delayMs?: number;
-        };
-        /** @description night.session.siteControl.presentationPowerOff (RESTING-MODE.md §10.2). powerDomain must be "presentation" (server-side): this binding is what power-down-presentation invokes, and every other domain is refused rather than guessed. removalPolicy "immediate" requires immediateSafeAttestation: true and forbids prerequisites; "after-actions" requires a non-empty prerequisites list and forbids immediateSafeAttestation (server-side; that either/or is not expressible in this schema alone). */
-        ConfigNightSessionPresentationPowerOff: {
-            action: string;
-            /** @enum {string} */
-            powerDomain: "presentation" | "environmental" | "mixed" | "unknown";
-            /** @enum {string} */
-            domainProvenance: "provider" | "operator-declared";
-            /** @enum {string} */
-            removalPolicy: "immediate" | "after-actions";
-            immediateSafeAttestation?: boolean;
-            prerequisites?: components["schemas"]["ConfigNightSessionPrerequisite"][];
-        };
-        /** @description night.session.siteControl (RESTING-MODE.md §10.2/§10.4, ADR-016, Track F seam F6): entirely optional, and every field within it is independently optional too; an empty object is refused (server-side) as configuration nothing enforces. requestThermalProfile, when present, names an existing show.action object in this session's own show (server-side). */
-        ConfigNightSessionSiteControl: {
-            requestThermalProfile?: string;
-            presentationPowerOn?: components["schemas"]["ConfigNightSessionPowerBinding"];
-            presentationPowerOff?: components["schemas"]["ConfigNightSessionPresentationPowerOff"];
+        /** @description night.session.siteActions (ADR-065). Every field is optional and every action must belong to this session's own show. `prepareSite` runs once per new preparation, `endSession` runs when the night reaches stopped after its power down, or when it is ended without one, and never after a hard stop. Replaces `siteControl`, which a write is refused for; stored revisions that still carry it read back translated. */
+        ConfigNightSessionSiteActions: {
+            prepareSite?: string[];
+            powerDown?: components["schemas"]["ConfigNightSessionPowerDown"];
+            endSession?: string[];
         };
         /** @description One entry of night.session.interlocks (RESTING-MODE.md §10.1, Track F seam F6): a named rule attached to exactly one lifecycle phase, unique within a configuration revision. A "disabled" entry carries only name, phase, and posture; every other property below is refused for it (server-side). An "observe" entry must not set onUnavailable or overridePolicy; a "block" entry requires both, with no default (server-side; the exact combination rules are not expressible in this schema alone). signal names an existing show.action object that declares an mqtt target with expect.kind other than "none" (server-side): an interlock's evidence is that action's own request/response, the only mechanism this build has to reach a site sensor. */
         ConfigNightSessionInterlock: {
@@ -8291,7 +8268,7 @@ export interface components {
             /** @enum {string} */
             overridePolicy?: "none" | "authorized-operator";
         };
-        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, enterResting and enterEndOfNight carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a-documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one - matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteControl/interlocks validation, the same-show rule) applies identically here. */
+        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, enterResting and enterEndOfNight carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a-documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one - matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteActions/interlocks validation, the same-show rule) applies identically here. */
         ConfigNightSessionWrite: {
             show: string;
             label: string;
@@ -8305,7 +8282,7 @@ export interface components {
              * @enum {string}
              */
             announcementDefaultPolicy?: "duck" | "mix" | "interrupt";
-            siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
+            siteActions?: components["schemas"]["ConfigNightSessionSiteActions"];
             interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
             /** @description Optional. How long the lights take to fade out, finishing as each show starts, the first show after pre-show included. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
             lightsFadeOutMs?: number;
@@ -8318,7 +8295,7 @@ export interface components {
             /** @description Optional. How long rendered projections take to fade in, starting when the resting playlist starts after a show. Left out means the lights fade-in time. Set alone, projections fade and the lights do not. */
             renderFadeInMs?: number;
         };
-        /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seams F1 and F6, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} - never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) - this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are entirely optional (RESTING-MODE.md §10's own opening line: a deployment that omits both runs the whole night loop unchanged). Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item, every siteControl action, every interlock signal) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
+        /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seams F1 and F6, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} - never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) - this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteActions` and `interlocks` are entirely optional (RESTING-MODE.md §10's own opening line: a deployment that omits both runs the whole night loop unchanged). Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item, every siteActions action, every interlock signal) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
         ConfigNightSession: {
             show: string;
             label: string;
@@ -8329,7 +8306,7 @@ export interface components {
             enterEndOfNight: components["schemas"]["ConfigNightSessionEnterEndOfNight"];
             /** @enum {string} */
             announcementDefaultPolicy: "duck" | "mix" | "interrupt";
-            siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
+            siteActions?: components["schemas"]["ConfigNightSessionSiteActions"];
             interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
             /** @description Optional. How long the lights take to fade out, finishing as each show starts, the first show after pre-show included. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
             lightsFadeOutMs?: number;
