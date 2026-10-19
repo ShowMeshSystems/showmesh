@@ -839,6 +839,11 @@ func TestDecodeShowActionPayloadResolumeValidRoundTripsForEveryAction(t *testing
 			refJSON:  `{"layer": "Whole House 1", "master": 0.5}`,
 			resolver: newFakeResolumeReferenceResolver().withKnown("layer", "Whole House 1"),
 		},
+		{
+			action: ShowActionResolumeFadeLayer, safetyClass: ShowSafetyClassNone,
+			refJSON:  `{"layer": "Whole House 1", "targetPercent": 0, "durationMs": 2000}`,
+			resolver: newFakeResolumeReferenceResolver().withKnown("layer", "Whole House 1"),
+		},
 	}
 
 	for _, tc := range cases {
@@ -1162,5 +1167,22 @@ func TestDecodeRequiredIntRefusesFractional(t *testing.T) {
 	_, verr := decodeRequiredInt(top, "n", "n")
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid {
 		t.Fatalf("expected field-invalid for a fractional value, got %+v", verr)
+	}
+}
+
+func TestDecodeShowActionPayloadResolumeFadeLayerRefusesOutOfRangeValues(t *testing.T) {
+	for _, ref := range []string{
+		`{"layer": "Whole House 1", "targetPercent": 101}`,
+		`{"layer": "Whole House 1", "targetPercent": -1}`,
+		`{"layer": "Whole House 1", "targetPercent": 50, "durationMs": -5}`,
+		`{"layer": "Whole House 1", "targetPercent": 50, "durationMs": 1.5}`,
+		`{"layer": "Whole House 1"}`,
+	} {
+		raw := fmt.Sprintf(`{"show": "halloween-2026", "label": "x", "safetyClass": "none",
+			"target": {"integration": "resolume", "action": "fadeLayer", "ref": %s}}`, ref)
+		resolver := newFakeResolumeReferenceResolver().withKnown("layer", "Whole House 1")
+		if _, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil); verr == nil {
+			t.Errorf("ref %s was accepted, want a validation error", ref)
+		}
 	}
 }

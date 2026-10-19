@@ -44,6 +44,8 @@ const (
 type ResolumeInstance struct {
 	ID  string
 	URL string
+	// OSCPort is Arena's OSC input port for layer fades; 0 means 7000.
+	OSCPort int `json:",omitempty"`
 }
 
 // ResolumeInstancesPayload is config_revisions.payload_json's decoded shape
@@ -112,7 +114,10 @@ func sortedResolumeInstanceCopy(instances []ResolumeInstance) []ResolumeInstance
 		if out[i].ID != out[j].ID {
 			return out[i].ID < out[j].ID
 		}
-		return out[i].URL < out[j].URL
+		if out[i].URL != out[j].URL {
+			return out[i].URL < out[j].URL
+		}
+		return out[i].OSCPort < out[j].OSCPort
 	})
 	return out
 }
@@ -169,6 +174,10 @@ func ValidateResolumeInstances(instances []ResolumeInstance, fppEndpoints []FPPE
 		}
 		if u.User != nil {
 			return operatorMessage(fmt.Sprintf("Resolume instance %q has a login in its URL. Remove it.", inst.ID))
+		}
+
+		if inst.OSCPort < 0 || inst.OSCPort > 65535 {
+			return operatorMessage(fmt.Sprintf("Resolume instance %q has OSC port %d, which is not a valid port. Use a port from 1 to 65535.", inst.ID, inst.OSCPort))
 		}
 
 		if err := ValidateResolumeIDAgainstFPPEndpoints(inst.ID, fppEndpoints); err != nil {

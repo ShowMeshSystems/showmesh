@@ -159,7 +159,7 @@ var nightSessionDurationKeys = map[string]bool{
 // §10's own opening line).
 var nightSessionTopLevelKeys = map[string]bool{
 	"show": true, "label": true, "showPlaylist": true, "resting": true,
-	"enterShow": true, "enterResting": true, "announcementDefaultPolicy": true,
+	"enterShow": true, "enterResting": true, "enterEndOfNight": true, "announcementDefaultPolicy": true,
 	"siteControl": true, "interlocks": true,
 	"lightsFadeOutMs": true, "lightsFadeInMs": true, "fadeOutNightMs": true,
 }
@@ -173,6 +173,7 @@ var (
 	nightSessionBackgroundItemKeys = map[string]bool{"itemId": true, "show": true, "sequence": true, "target": true}
 	nightSessionTransitionKeys     = map[string]bool{"cues": true, "blackoutHoldMs": true}
 	nightSessionRestingTransKeys   = map[string]bool{"cues": true, "blackoutAfterShowMs": true}
+	nightSessionEndOfNightKeys     = map[string]bool{"mode": true, "cues": true, "blackoutAfterShowMs": true}
 	nightSessionCueKeys            = map[string]bool{"name": true, "role": true, "action": true, "offsetMs": true, "fadeDurationMs": true, "barrier": true, "onFailure": true, "announcementPolicy": true}
 )
 
@@ -185,6 +186,10 @@ type NightSessionPayload struct {
 	Resting      NightSessionResting      `json:"resting"`
 	EnterShow    NightSessionEnterShow    `json:"enterShow"`
 	EnterResting NightSessionEnterResting `json:"enterResting"`
+
+	// EnterEndOfNight replaces EnterResting after the final show. Nil means
+	// the block was omitted, which runs EnterResting as before.
+	EnterEndOfNight *NightSessionEnterEndOfNight `json:"enterEndOfNight,omitempty"`
 
 	// AnnouncementDefaultPolicy is the duck/mix/interrupt policy an
 	// announcement cue uses when it names none of its own (RESTING-MODE.md
@@ -499,6 +504,56 @@ type NightSessionEnterResting struct {
 	BlackoutAfterShowMs int               `json:"blackoutAfterShowMs"`
 }
 
+// The night.session.enterEndOfNight.mode values.
+const (
+	NightSessionEndOfNightModeResting = "resting"
+	NightSessionEndOfNightModeNone    = "none"
+	NightSessionEndOfNightModeCustom  = "custom"
+)
+
+var nightSessionEndOfNightModeValues = map[string]bool{
+	NightSessionEndOfNightModeResting: true,
+	NightSessionEndOfNightModeNone:    true,
+	NightSessionEndOfNightModeCustom:  true,
+}
+
+// NightSessionEnterEndOfNight is night.session.enterEndOfNight. Cues is
+// empty unless Mode is custom. A nil BlackoutAfterShowMs uses enterResting's.
+type NightSessionEnterEndOfNight struct {
+	Mode                string            `json:"mode"`
+	Cues                []NightSessionCue `json:"cues,omitempty"`
+	BlackoutAfterShowMs *int              `json:"blackoutAfterShowMs,omitempty"`
+}
+
+// EndOfNightMode is the resolved enterEndOfNight.mode: resting when the
+// block is omitted.
+func (p NightSessionPayload) EndOfNightMode() string {
+	if p.EnterEndOfNight == nil {
+		return NightSessionEndOfNightModeResting
+	}
+	return p.EnterEndOfNight.Mode
+}
+
+// EndOfNightCues is the cue list the night runs after the final show.
+func (p NightSessionPayload) EndOfNightCues() []NightSessionCue {
+	switch p.EndOfNightMode() {
+	case NightSessionEndOfNightModeCustom:
+		return p.EnterEndOfNight.Cues
+	case NightSessionEndOfNightModeNone:
+		return nil
+	default:
+		return p.EnterResting.Cues
+	}
+}
+
+// EndOfNightBlackoutAfterShowMs is the blackout hold after the final show.
+func (p NightSessionPayload) EndOfNightBlackoutAfterShowMs() int {
+	if p.EnterEndOfNight == nil || p.EnterEndOfNight.BlackoutAfterShowMs == nil {
+		return p.EnterResting.BlackoutAfterShowMs
+	}
+	return *p.EnterEndOfNight.BlackoutAfterShowMs
+}
+
 // EncodeNightSessionPayload marshals p into config_revisions.payload_json's
 // column shape. p is assumed already valid (the product of
 // DecodeNightSessionPayload); this function does not re-validate.
@@ -635,6 +690,11 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		return NightSessionPayload{}, verr
 	}
 
+	enterEndOfNight, verr := decodeNightSessionEnterEndOfNight(top, show, actionResolver)
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+
 	announcementDefaultPolicy, verr := decodeDefaultedEnum(top, "announcementDefaultPolicy", "announcementDefaultPolicy", NightSessionAnnouncementPolicyDefault, nightSessionAnnouncementPolicyValues)
 	if verr != nil {
 		return NightSessionPayload{}, verr
@@ -669,10 +729,15 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 	if verr := rejectLightsFadeCueOverlap("lightsFadeInMs", lightsFadeInMs, "enterResting", enterResting.Cues); verr != nil {
 		return NightSessionPayload{}, verr
 	}
+	if enterEndOfNight != nil {
+		if verr := rejectLightsFadeCueOverlap("lightsFadeInMs", lightsFadeInMs, "enterEndOfNight", enterEndOfNight.Cues); verr != nil {
+			return NightSessionPayload{}, verr
+		}
+	}
 
 	return NightSessionPayload{
 		Show: show, Label: label, ShowPlaylist: showPlaylist, Resting: resting,
-		EnterShow: enterShow, EnterResting: enterResting,
+		EnterShow: enterShow, EnterResting: enterResting, EnterEndOfNight: enterEndOfNight,
 		AnnouncementDefaultPolicy: announcementDefaultPolicy,
 		SiteControl:               siteControl,
 		Interlocks:                interlocks,
@@ -1142,6 +1207,57 @@ func decodeNightSessionEnterResting(fields map[string]json.RawMessage, show stri
 		return NightSessionEnterResting{}, verr
 	}
 	return NightSessionEnterResting{Cues: cues, BlackoutAfterShowMs: blackoutAfterShowMs}, nil
+}
+
+// decodeNightSessionEnterEndOfNight reads the optional enterEndOfNight
+// block. Omitted returns nil, which keeps the resting cues after the final
+// show. Only custom carries cues, and it must carry at least one; the other
+// modes accept an empty list so a read config can be written back unchanged.
+func decodeNightSessionEnterEndOfNight(top map[string]json.RawMessage, show string, actionResolver ActionResolver) (*NightSessionEnterEndOfNight, *ValidationError) {
+	if _, present := top["enterEndOfNight"]; !present {
+		return nil, nil
+	}
+	fields, verr := decodeRequiredObject(top, "enterEndOfNight", "enterEndOfNight")
+	if verr != nil {
+		return nil, verr
+	}
+	if verr := rejectUnknownKeysUnder(fields, nightSessionEndOfNightKeys, "enterEndOfNight"); verr != nil {
+		return nil, verr
+	}
+	mode, verr := decodeRequiredEnum(fields, "mode", "enterEndOfNight.mode", nightSessionEndOfNightModeValues)
+	if verr != nil {
+		return nil, verr
+	}
+	out := &NightSessionEnterEndOfNight{Mode: mode}
+	if _, present := fields["blackoutAfterShowMs"]; present {
+		v, verr := decodeRequiredNonNegativeInt(fields, "blackoutAfterShowMs", "enterEndOfNight.blackoutAfterShowMs")
+		if verr != nil {
+			return nil, verr
+		}
+		out.BlackoutAfterShowMs = &v
+	}
+	var cues []NightSessionCue
+	if _, present := fields["cues"]; present || mode == NightSessionEndOfNightModeCustom {
+		if cues, verr = decodeNightSessionCues(fields, "enterEndOfNight.cues", show, actionResolver); verr != nil {
+			return nil, verr
+		}
+	}
+	switch {
+	case mode == NightSessionEndOfNightModeCustom:
+		out.Cues = cues
+		if len(cues) == 0 {
+			return nil, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "enterEndOfNight.cues",
+				Detail: "enterEndOfNight.cues is empty, so the custom end of night has nothing to run. Add a cue, or set mode to none.",
+			}
+		}
+	case len(cues) > 0:
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "enterEndOfNight.cues",
+			Detail: fmt.Sprintf("enterEndOfNight.cues is only used when mode is custom, and mode is %s. Set mode to custom, or remove the cues.", mode),
+		}
+	}
+	return out, nil
 }
 
 func decodeNightSessionCues(top map[string]json.RawMessage, field, show string, actionResolver ActionResolver) ([]NightSessionCue, *ValidationError) {

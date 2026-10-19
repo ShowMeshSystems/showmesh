@@ -46,6 +46,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/oscfade"
 )
 
 // resolumeActionCoordinatorRequiredLabel mirrors
@@ -98,6 +99,11 @@ var resolumeActionParamVocabulary = map[resolume.ActionName][]api.ResolumeAction
 		{Name: "layer", Kind: api.ResolumeActionParamString, Required: true},
 		{Name: "master", Kind: api.ResolumeActionParamNumber, Required: true},
 	},
+	resolume.ActionFadeLayer: {
+		{Name: "layer", Kind: api.ResolumeActionParamString, Required: true},
+		{Name: "targetPercent", Kind: api.ResolumeActionParamNumber, Required: true},
+		{Name: "durationMs", Kind: api.ResolumeActionParamNumber, Required: false},
+	},
 }
 
 // resolumeActionDispatcherAdapter joins a real *resolume.ActionDispatcher
@@ -109,6 +115,7 @@ var resolumeActionParamVocabulary = map[resolume.ActionName][]api.ResolumeAction
 // in coordinator.go.
 type resolumeActionDispatcherAdapter struct {
 	dispatcher *resolume.ActionDispatcher
+	osc        *oscfade.Fader
 	now        func() time.Time
 }
 
@@ -118,9 +125,10 @@ type resolumeActionDispatcherAdapter struct {
 // non-nil"); this file's only caller (coordinator.go's Run) already gates
 // on resolumeWire.collector != nil before calling this, the identical gate
 // resolumeWire.RunWatcherSupervisor's own goroutine is started under.
-func newResolumeActionDispatcherAdapter(collector *resolume.Collector) *resolumeActionDispatcherAdapter {
+func newResolumeActionDispatcherAdapter(collector *resolume.Collector, osc *oscfade.Fader) *resolumeActionDispatcherAdapter {
 	return &resolumeActionDispatcherAdapter{
 		dispatcher: resolume.NewActionDispatcher(collector, resolume.ActionDispatcherOptions{}),
+		osc:        osc,
 		now:        time.Now,
 	}
 }
@@ -232,6 +240,10 @@ func (a *resolumeActionDispatcherAdapter) Dispatch(ctx context.Context, action s
 		}
 	}
 
+	if name == resolume.ActionFadeLayer {
+		return a.dispatchFadeLayer(ctx, params, tc), nil
+	}
+
 	actionParams, refusalReason, err := buildResolumeActionParams(name, params, tc)
 	if err != nil {
 		return api.ResolumeActionResult{}, fmt.Errorf("coordinator: resolume action adapter: building params for %q: %w", action, err)
@@ -270,7 +282,7 @@ func resolvedObjectID(name resolume.ActionName, actionParams resolume.ActionPara
 	switch name {
 	case resolume.ActionLaunchClip:
 		return actionParams.ClipID, true
-	case resolume.ActionClearLayer, resolume.ActionSetLayerBypass, resolume.ActionSetLayerMaster:
+	case resolume.ActionClearLayer, resolume.ActionSetLayerBypass, resolume.ActionSetLayerMaster, resolume.ActionFadeLayer:
 		return actionParams.LayerID, true
 	case resolume.ActionLaunchColumn:
 		return actionParams.ColumnID, true
@@ -402,6 +414,8 @@ func resolumeActionNameFromWire(action string) (resolume.ActionName, bool) {
 		return resolume.ActionSetLayerBypass, true
 	case string(resolume.ActionSetLayerMaster):
 		return resolume.ActionSetLayerMaster, true
+	case string(resolume.ActionFadeLayer):
+		return resolume.ActionFadeLayer, true
 	default:
 		return "", false
 	}
@@ -534,4 +548,48 @@ func requiredStringParam(params map[string]any, key string) (string, error) {
 func optionalStringParam(params map[string]any, key string) string {
 	v, _ := params[key].(string)
 	return v
+}
+
+// dispatchFadeLayer sends a layer fade over OSC (ADR-064). It never touches
+// Arena's REST API, and OSC sends no reply, so a sent fade is unconfirmable.
+func (a *resolumeActionDispatcherAdapter) dispatchFadeLayer(ctx context.Context, params map[string]any, tc *resolume.TrackedComposition) api.ResolumeActionResult {
+	refused := func(reason string) api.ResolumeActionResult {
+		return api.ResolumeActionResult{Outcome: api.ResolumeOutcomeRefused, Reason: reason}
+	}
+	if a.osc == nil {
+		return refused("No OSC address is set up for this Resolume instance, so the fade was not sent. Check the instance URL and OSC port.")
+	}
+	layerName, _ := params["layer"].(string)
+	id, rerr := resolume.ResolveLayer(tc, layerName)
+	if rerr != nil {
+		return refused(rerr.Error())
+	}
+	layer, ok := tc.LayerByID(id)
+	if !ok {
+		return refused(fmt.Sprintf("Layer %q is not in the uploaded composition, so the fade was not sent. Upload the composition again.", layerName))
+	}
+	target, _ := params["targetPercent"].(float64)
+	if target < 0 || target > 100 {
+		return refused(fmt.Sprintf("The fade target %g is outside 0 to 100, so the fade was not sent. Enter a target from 0 to 100.", target))
+	}
+	durationMs, _ := params["durationMs"].(float64)
+	if durationMs < 0 {
+		return refused("The fade time is negative, so the fade was not sent. Enter a fade time of zero or more.")
+	}
+	duration := time.Duration(durationMs) * time.Millisecond
+
+	start, reason := a.dispatcher.FadeLayerStart(ctx, id)
+	if reason != "" {
+		return refused(reason)
+	}
+	dispatchedAt := a.now()
+	resolvedAt := dispatchedAt
+	if err := a.osc.Fade(layer.Index, start, target/100, duration, nil); err != nil {
+		return api.ResolumeActionResult{Outcome: api.ResolumeOutcomeFailed, ResolvedAt: &resolvedAt, ResolvedID: id.String(),
+			Reason: "The fade could not be sent to Resolume. Check the OSC port and that Arena's OSC input is on."}
+	}
+	return api.ResolumeActionResult{
+		Outcome: api.ResolumeOutcomeUnconfirmable, Dispatched: true, DispatchedAt: &dispatchedAt, ResolvedAt: &resolvedAt, ResolvedID: id.String(),
+		Reason: fmt.Sprintf("The fade to %g%% over %s was sent. Resolume does not answer OSC, so it cannot be confirmed.", target, duration),
+	}
 }

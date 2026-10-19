@@ -393,7 +393,7 @@ export function SettingsConnections() {
               {instances.map((instance, index) => {
                 const health = resolumeHealthFor(model.resolume, instance.id)
                 const loadedRow = resolumeLoad.kind === 'loaded' ? resolumeLoad.response.payload.instances[index] : undefined
-                const rowDirty = loadedRow === undefined || loadedRow.id !== instance.id || loadedRow.url !== instance.url
+                const rowDirty = loadedRow === undefined || loadedRow.id !== instance.id || loadedRow.url !== instance.url || loadedRow.oscPort !== instance.oscPort
                 return (
                   <div key={index} className="sm-panel">
                     <div className="sm-inline-row sm-inline-row--end">
@@ -418,6 +418,24 @@ export function SettingsConnections() {
                               setInstancesDirty(true)
                             }}
                             className="sm-input--address"
+                          />
+                        )}
+                      </Field>
+                      <Field label="OSC port" help="Arena's OSC input, used for layer fades. Empty means 7000.">
+                        {(props) => (
+                          <Input {...props}
+                            type="number"
+                            min={1}
+                            max={65535}
+                            placeholder="7000"
+                            value={instance.oscPort ?? ''}
+                            onChange={(e) => {
+                              const next: ConfigResolumeInstance = { id: instance.id, url: instance.url }
+                              if (e.target.value !== '') next.oscPort = Number(e.target.value)
+                              setInstances(instances.map((row, i) => (i === index ? next : row)))
+                              setInstancesDirty(true)
+                            }}
+                            className="sm-input--narrow"
                           />
                         )}
                       </Field>

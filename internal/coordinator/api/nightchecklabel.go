@@ -18,6 +18,8 @@ var nightCheckLabels = map[string]string{
 	"enterShow:first-cue-confirmable":              "First show cue",
 	"enterShow:brightness-composition":             "Brightness when the show starts",
 	"enterResting:brightness-composition":          "Brightness when the show ends",
+	"enterEndOfNight:brightness-composition":       "Brightness after the last show",
+	"enterEndOfNight:cues":                         "Cues after the last show",
 	"lights:fade-out":                              "Lights fade out",
 	"lights:fade-in":                               "Lights fade in",
 	"lights:fade-length":                           "Lights fade length",

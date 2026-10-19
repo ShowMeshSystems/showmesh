@@ -91,6 +91,9 @@ func AnnouncementBindings(ctx context.Context, st *store.Store, showID string) (
 			continue
 		}
 		cues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
+		if payload.EndOfNightMode() == config.NightSessionEndOfNightModeCustom {
+			cues = append(cues, payload.EnterEndOfNight.Cues...)
+		}
 		for _, cue := range cues {
 			if cue.Role != config.NightSessionCueRoleAnnouncement || cue.Action == "" {
 				continue

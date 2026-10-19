@@ -980,8 +980,13 @@ type DefinitionDraft = {
   lightsFadeInMs: string
   enterShow: CueDraft[]
   enterResting: CueDraft[]
+  endOfNightMode: EndOfNightMode
+  endOfNightBlackoutMs: string
+  enterEndOfNight: CueDraft[]
   base: ConfigNightSessionWrite | null
 }
+
+type EndOfNightMode = 'resting' | 'none' | 'custom'
 
 const CUE_ROLES = ['lighting', 'projection', 'audio', 'announcement', 'other'] as const
 const ANNOUNCEMENT_POLICIES = ['duck', 'mix', 'interrupt'] as const
@@ -1042,7 +1047,7 @@ const blankDefinition = (show = ''): DefinitionDraft => ({
   timelineShow: show, timelineSequence: '', timelineTarget: '', endOfNightPlaylist: '', endOfNightRepeat: false,
   announcementDefaultPolicy: 'duck', backgroundAudio: blankBackgroundAudio(), siteControl: blankSiteControl(), interlocks: [],
   blackoutHoldMs: '0', blackoutAfterShowMs: '0', lightsFadeOutMs: '', lightsFadeInMs: '', fadeOutNightMs: '',
-  enterShow: [], enterResting: [], base: null,
+  enterShow: [], enterResting: [], endOfNightMode: 'resting', endOfNightBlackoutMs: '', enterEndOfNight: [], base: null,
 })
 
 function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDraft {
@@ -1105,7 +1110,10 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
     lightsFadeOutMs: payload.lightsFadeOutMs === undefined ? '' : String(payload.lightsFadeOutMs),
     fadeOutNightMs: payload.fadeOutNightMs === undefined ? '' : String(payload.fadeOutNightMs),
     lightsFadeInMs: payload.lightsFadeInMs === undefined ? '' : String(payload.lightsFadeInMs),
-    enterShow: payload.enterShow.cues.map(cue), enterResting: payload.enterResting.cues.map(cue), base: payload,
+    enterShow: payload.enterShow.cues.map(cue), enterResting: payload.enterResting.cues.map(cue),
+    endOfNightMode: payload.enterEndOfNight.mode,
+    endOfNightBlackoutMs: payload.enterEndOfNight.blackoutAfterShowMs === undefined ? '' : String(payload.enterEndOfNight.blackoutAfterShowMs),
+    enterEndOfNight: payload.enterEndOfNight.cues.map(cue), base: payload,
   }
 }
 
@@ -1266,6 +1274,9 @@ function definitionPayload(
   if (!enteringShow.ok) return { error: enteringShow.error }
   const enteringResting = buildCues(draft.enterResting, 'Enter-resting')
   if (!enteringResting.ok) return { error: enteringResting.error }
+  const enteringEndOfNight = buildCues(draft.endOfNightMode === 'custom' ? draft.enterEndOfNight : [], 'End-of-night')
+  if (!enteringEndOfNight.ok) return { error: enteringEndOfNight.error }
+  if (draft.endOfNightMode === 'custom' && enteringEndOfNight.cues.length === 0) return { error: 'Custom end-of-night cues need at least one cue. Add a cue, or choose Run no cues.' }
   const backgroundAudio = buildBackgroundAudio(draft.backgroundAudio, audioAssets, showAudioNodes)
   if (!backgroundAudio.ok) return { error: backgroundAudio.error }
   const siteControl = buildSiteControl(draft.siteControl)
@@ -1276,6 +1287,8 @@ function definitionPayload(
   if (!Number.isInteger(blackoutHoldMs) || blackoutHoldMs < 0) return { error: 'Blackout hold must be a whole number of milliseconds, 0 or more.' }
   const blackoutAfterShowMs = Number(draft.blackoutAfterShowMs)
   if (!Number.isInteger(blackoutAfterShowMs) || blackoutAfterShowMs < 0) return { error: 'Blackout after show must be a whole number of milliseconds, 0 or more.' }
+  const endOfNightBlackoutMs = draft.endOfNightBlackoutMs.trim() === '' ? null : Number(draft.endOfNightBlackoutMs)
+  if (endOfNightBlackoutMs !== null && (!Number.isInteger(endOfNightBlackoutMs) || endOfNightBlackoutMs < 0)) return { error: 'Blackout after the last show must be a whole number of milliseconds, 0 or more, or empty.' }
 
   const lightsFadeOutMs = parseLightsFadeMs(draft.lightsFadeOutMs, 'Lights fade-out')
   if (typeof lightsFadeOutMs === 'string') return { error: lightsFadeOutMs }
@@ -1302,6 +1315,10 @@ function definitionPayload(
     enterShow: { ...(base?.enterShow ?? {}), blackoutHoldMs, cues: enteringShow.cues },
     enterResting: { ...(base?.enterResting ?? {}), blackoutAfterShowMs, cues: enteringResting.cues },
     announcementDefaultPolicy: draft.announcementDefaultPolicy,
+  }
+  result.enterEndOfNight = {
+    mode: draft.endOfNightMode, cues: enteringEndOfNight.cues,
+    ...(endOfNightBlackoutMs === null ? {} : { blackoutAfterShowMs: endOfNightBlackoutMs }),
   }
   if (lightsFadeOutMs === null) delete result.lightsFadeOutMs
   else result.lightsFadeOutMs = lightsFadeOutMs
@@ -1408,7 +1425,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
       .catch((err: unknown) => setDeleteError(describeApiError(err)))
       .finally(() => setDeleting(false))
   }
-  const updateCues = (which: 'enterShow' | 'enterResting', index: number, patch: Partial<CueDraft>) => setDraft((current) => ({ ...current, [which]: current[which].map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
+  const updateCues = (which: 'enterShow' | 'enterResting' | 'enterEndOfNight', index: number, patch: Partial<CueDraft>) => setDraft((current) => ({ ...current, [which]: current[which].map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
   const save = () => {
     const showAudioNodes = showAudioNodesState.kind === 'loaded' ? showAudioNodesState.audioNodes : []
     const payload = definitionPayload(draft, audioAssets, showAudioNodes)
@@ -1427,7 +1444,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
       })
       .finally(() => setSaving(false))
   }
-  const addCue = (which: 'enterShow' | 'enterResting') => setDraft((current) => ({ ...current, [which]: [...current[which], blankCue()] }))
+  const addCue = (which: 'enterShow' | 'enterResting' | 'enterEndOfNight') => setDraft((current) => ({ ...current, [which]: [...current[which], blankCue()] }))
 
   const updateBackgroundAudio = (patch: Partial<BackgroundAudioDraft>) => setDraft((current) => ({ ...current, backgroundAudio: { ...current.backgroundAudio, ...patch } }))
   const updateBackgroundAudioItem = (index: number, patch: Partial<BackgroundAudioItemDraft>) =>
@@ -1496,6 +1513,22 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
           <div className="sm-inspector__group"><h4 className="sm-subsection__title">Transition timing</h4><Field label="Blackout hold (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutHoldMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutHoldMs: e.target.value }))} />}</Field><Field label="Blackout after show (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutAfterShowMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutAfterShowMs: e.target.value }))} />}</Field><Field label="Lights fade-out (ms)" help="Finishes as the resting sequence ends before a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeOutMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeOutMs: e.target.value }))} />}</Field><Field label="Lights fade-in (ms)" help="Starts when the resting playlist starts after a show. Leave empty for no fade.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.lightsFadeInMs} onChange={(e) => setDraft((d) => ({ ...d, lightsFadeInMs: e.target.value }))} />}</Field><Field label="Fade Out Night (ms)" help="How long Fade Out Night fades the lights before stopping FPP. Leave empty to use the lights fade-out.">{(p) => <Input {...p} type="number" min="1000" step="1" value={draft.fadeOutNightMs} onChange={(e) => setDraft((d) => ({ ...d, fadeOutNightMs: e.target.value }))} />}</Field><Field label="Default announcement policy">{(p) => <Select {...p} value={draft.announcementDefaultPolicy} onChange={(e) => setDraft((d) => ({ ...d, announcementDefaultPolicy: e.target.value as DefinitionDraft['announcementDefaultPolicy'] }))}>{ANNOUNCEMENT_POLICIES.map((v) => <option key={v} value={v}>{optionLabel(v)}</option>)}</Select>}</Field></div>
           <TransitionStepEditor title="Enter show" offsetHelp="Milliseconds from the end of the resting sequence. Negative is before." steps={draft.enterShow} actions={actions} onChange={(i, p) => updateCues('enterShow', i, p)} onAdd={() => addCue('enterShow')} onRemove={(i) => setDraft((d) => ({ ...d, enterShow: d.enterShow.filter((_, n) => n !== i) }))} />
           <TransitionStepEditor title="Enter resting" offsetHelp="Milliseconds from the end of the show. Negative is before." steps={draft.enterResting} actions={actions} onChange={(i, p) => updateCues('enterResting', i, p)} onAdd={() => addCue('enterResting')} onRemove={(i) => setDraft((d) => ({ ...d, enterResting: d.enterResting.filter((_, n) => n !== i) }))} />
+          <div className="sm-inspector__group">
+            <h4 className="sm-subsection__title">After the last show</h4>
+            <RadioCardList
+              label="Cues after the last show"
+              help="Runs in place of the enter resting cues once the last show ends. The end-of-night playlist starts either way."
+              value={draft.endOfNightMode}
+              onChange={(value) => setDraft((d) => ({ ...d, endOfNightMode: value as EndOfNightMode }))}
+              options={[
+                { value: 'resting', title: 'Run the enter resting cues', desc: 'The same cues as after every other show. This is the default.' },
+                { value: 'none', title: 'Run no cues', desc: 'Only the end-of-night playlist starts.' },
+                { value: 'custom', title: 'Run end-of-night cues', desc: 'A separate list, such as a different Resolume resting look.' },
+              ]}
+            />
+            <Field label="Blackout after the last show (ms)" help="Leave empty to use Blackout after show.">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.endOfNightBlackoutMs} onChange={(e) => setDraft((d) => ({ ...d, endOfNightBlackoutMs: e.target.value }))} />}</Field>
+          </div>
+          {draft.endOfNightMode === 'custom' && <TransitionStepEditor title="Enter end of night" offsetHelp="Milliseconds from the end of the last show. Negative is before." steps={draft.enterEndOfNight} actions={actions} onChange={(i, p) => updateCues('enterEndOfNight', i, p)} onAdd={() => addCue('enterEndOfNight')} onRemove={(i) => setDraft((d) => ({ ...d, enterEndOfNight: d.enterEndOfNight.filter((_, n) => n !== i) }))} />}
           <div className="sm-inspector__group">
             <h4 className="sm-subsection__title">Background audio</h4>
             <RadioCardList

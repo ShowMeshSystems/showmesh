@@ -241,7 +241,7 @@ func TestResolumeActionEndToEndLaunchClipReachesArena(t *testing.T) {
 
 	// The real adapter under test — resolumeactionwiring.go's own
 	// production constructor, not a hand-built substitute for it.
-	adapter := newResolumeActionDispatcherAdapter(wire.collector)
+	adapter := newResolumeActionDispatcherAdapter(wire.collector, nil)
 
 	svc := identity.NewService(st, time.Now, t.TempDir(), identity.WithLogger(logger))
 	operator, err := svc.CreatePrincipal(ctx, "e2e-operator", identity.KindHuman, identity.RoleOperator, "not-a-real-secret-01")
@@ -356,7 +356,7 @@ func TestResolumeActionEndToEndUnresolvedReferenceIssuesNoHTTPRequest(t *testing
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
 
-	adapter := newResolumeActionDispatcherAdapter(wire.collector)
+	adapter := newResolumeActionDispatcherAdapter(wire.collector, nil)
 
 	svc := identity.NewService(st, time.Now, t.TempDir(), identity.WithLogger(logger))
 	operator, err := svc.CreatePrincipal(ctx, "e2e-operator-noreq", identity.KindHuman, identity.RoleOperator, "not-a-real-secret-04")
@@ -443,7 +443,7 @@ func TestResolumeActionEndToEndDeckMismatchIssuesNoHTTPRequest(t *testing.T) {
 		t.Fatalf("selected deck after warmup poll = %+v, want deck 1002 selected (fixture wiring is wrong if this fails)", snap)
 	}
 
-	adapter := newResolumeActionDispatcherAdapter(wire.collector)
+	adapter := newResolumeActionDispatcherAdapter(wire.collector, nil)
 
 	svc := identity.NewService(st, time.Now, t.TempDir(), identity.WithLogger(logger))
 	operator, err := svc.CreatePrincipal(ctx, "e2e-operator-2", identity.KindHuman, identity.RoleOperator, "not-a-real-secret-02")
@@ -594,7 +594,7 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 		t.Fatalf("composition identity after warmup poll = %+v, want identified", snap)
 	}
 
-	adapter := newResolumeActionDispatcherAdapter(wire.collector)
+	adapter := newResolumeActionDispatcherAdapter(wire.collector, nil)
 
 	svc := identity.NewService(st, time.Now, filepath.Join(dir, "identity"), identity.WithLogger(logger))
 	operator, err := svc.CreatePrincipal(ctx, "e2e-operator-audit", identity.KindHuman, identity.RoleOperator, "not-a-real-secret-03")
