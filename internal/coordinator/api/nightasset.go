@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -83,14 +82,10 @@ func nightResolveFSEQDuration(ctx context.Context, deps Dependencies, lister nig
 		return nightAssetFSEQDurationResult{Reason: fmt.Sprintf("The file for resting sequence %s is not a sequence file. Upload a sequence file.", ref.Sequence)}
 	}
 
-	f, cleanup, err := nightOpenFSEQAsset(ctx, deps, rec)
+	frameCount, stepTimeMS, err := nightReadFSEQTiming(ctx, deps, rec)
 	if err != nil {
 		return nightAssetFSEQDurationResult{Cause: err, Reason: "The resting sequence file could not be read. Upload it again."}
 	}
-	defer cleanup()
-
-	frameCount := f.FrameCount()
-	stepTimeMS := f.StepTimeMS()
 	switch {
 	case frameCount == 0 && stepTimeMS == 0:
 		return nightAssetFSEQDurationResult{Reason: "The resting sequence file has no frames and no frame rate. Export it again.", Filename: rec.RuntimeFilename}
@@ -103,50 +98,18 @@ func nightResolveFSEQDuration(ctx context.Context, deps Dependencies, lister nig
 	return nightAssetFSEQDurationResult{DurationMS: durationMS, Filename: rec.RuntimeFilename}
 }
 
-// nightOpenFSEQAsset streams rec's bytes into a temp file (pkg/fseq.Open
-// needs a seekable *os.File) and opens it. The returned cleanup closes and
-// removes the temp file; always call it.
-func nightOpenFSEQAsset(ctx context.Context, deps Dependencies, rec store.AssetRecord) (*fseq.File, func(), error) {
+// nightReadFSEQTiming reads only rec's fixed header from the asset backend.
+// A resting sequence can be gigabytes, and this runs on the night loop.
+func nightReadFSEQTiming(ctx context.Context, deps Dependencies, rec store.AssetRecord) (int, byte, error) {
 	rc, size, err := deps.AssetBackend.Open(ctx, rec.StorageKey)
 	if err != nil {
-		return nil, func() {}, err
+		return 0, 0, err
 	}
 	defer func() { _ = rc.Close() }()
 	if size != rec.SizeBytes {
-		return nil, func() {}, fmt.Errorf("stored blob is %d bytes but the recorded size is %d bytes", size, rec.SizeBytes)
+		return 0, 0, fmt.Errorf("stored blob is %d bytes but the recorded size is %d bytes", size, rec.SizeBytes)
 	}
-
-	tmp, err := os.CreateTemp("", "showmesh-night-fseq-*")
-	if err != nil {
-		return nil, func() {}, err
-	}
-	cleanup := func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-	}
-	if _, err := io.Copy(tmp, io.LimitReader(rc, size)); err != nil {
-		cleanup()
-		return nil, func() {}, err
-	}
-	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-		cleanup()
-		return nil, func() {}, err
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return nil, func() {}, err
-	}
-	// tmp is closed above so fseq.Open can reopen it by name (its only
-	// entry point); cleanup still removes the file by name.
-	f, err := fseq.Open(tmp.Name())
-	if err != nil {
-		cleanup()
-		return nil, func() {}, err
-	}
-	return f, func() {
-		_ = f.Close()
-		_ = os.Remove(tmp.Name())
-	}, nil
+	return fseq.ReadTiming(rc)
 }
 
 // --- FPP playlist definition read (F0 §2: readable while idle, distinct

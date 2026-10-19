@@ -151,10 +151,11 @@ func nightBoundaryRetryEligible(b nightBoundary) bool {
 // applied to the three additional signals rule 2/3's position and repeat
 // evidence need.
 const (
-	nightSignalSequenceName           = "fpp.sequence.name"
-	nightSignalPositionElapsedSeconds = "fpp.position.elapsed.seconds"
-	nightSignalPositionElapsedMS      = "fpp.position.elapsed.ms"
-	nightSignalPlaylistRepeatMode     = "fpp.playlist.repeat_mode"
+	nightSignalSequenceName             = "fpp.sequence.name"
+	nightSignalPositionElapsedSeconds   = "fpp.position.elapsed.seconds"
+	nightSignalPositionElapsedMS        = "fpp.position.elapsed.ms"
+	nightSignalPositionRemainingSeconds = "fpp.position.remaining.seconds"
+	nightSignalPlaylistRepeatMode       = "fpp.playlist.repeat_mode"
 )
 
 func encodeNightContentAnchor(a nightContentAnchor) string {
