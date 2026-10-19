@@ -163,7 +163,7 @@ func decodeResolumeInstancesConfigPutBody(body io.Reader) ([]config.ResolumeInst
 
 	instances := make([]config.ResolumeInstance, 0, len(wire))
 	for _, e := range wire {
-		instances = append(instances, config.ResolumeInstance{ID: e.ID, URL: e.URL})
+		instances = append(instances, config.ResolumeInstance{ID: e.ID, URL: e.URL, OSCPort: e.OSCPort})
 	}
 	return instances, nil
 }
@@ -310,7 +310,7 @@ const resolumeInstancesRestartRequiredReason = "This change is already in effect
 func mapResolumeInstancesConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, instances []config.ResolumeInstance) v1.ResolumeInstancesConfigResponse {
 	payload := v1.ConfigResolumeInstancesPayload{Instances: make([]v1.ConfigResolumeInstance, 0, len(instances))}
 	for _, inst := range instances {
-		payload.Instances = append(payload.Instances, v1.ConfigResolumeInstance{ID: inst.ID, URL: inst.URL})
+		payload.Instances = append(payload.Instances, v1.ConfigResolumeInstance{ID: inst.ID, URL: inst.URL, OSCPort: inst.OSCPort})
 	}
 	return v1.ResolumeInstancesConfigResponse{
 		ServerTime:             formatTime(now),

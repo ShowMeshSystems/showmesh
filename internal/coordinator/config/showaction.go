@@ -461,6 +461,7 @@ const (
 	ShowActionResolumeSelectDeck     = "selectDeck"
 	ShowActionResolumeSetLayerBypass = "setLayerBypass"
 	ShowActionResolumeSetLayerMaster = "setLayerMaster"
+	ShowActionResolumeFadeLayer      = "fadeLayer"
 )
 
 // showActionResolumeActionNames is every accepted resolume action, sorted,
@@ -469,6 +470,7 @@ const (
 var showActionResolumeActionNames = []string{
 	ShowActionResolumeBlackout,
 	ShowActionResolumeClearLayer,
+	ShowActionResolumeFadeLayer,
 	ShowActionResolumeLaunchClip,
 	ShowActionResolumeLaunchColumn,
 	ShowActionResolumeSelectDeck,
@@ -484,6 +486,7 @@ var showActionResolumeActions = map[string]bool{
 	ShowActionResolumeSelectDeck:     true,
 	ShowActionResolumeSetLayerBypass: true,
 	ShowActionResolumeSetLayerMaster: true,
+	ShowActionResolumeFadeLayer:      true,
 }
 
 // resolumeActionDeclaredSafetyClass mirrors
@@ -500,6 +503,7 @@ var resolumeActionDeclaredSafetyClass = map[string]string{
 	ShowActionResolumeSelectDeck:     ShowSafetyClassNone,
 	ShowActionResolumeSetLayerBypass: ShowSafetyClassNone,
 	ShowActionResolumeSetLayerMaster: ShowSafetyClassNone,
+	ShowActionResolumeFadeLayer:      ShowSafetyClassNone,
 }
 
 // ResolumeActionDeclaredSafetyClass exposes resolumeActionDeclaredSafetyClass
@@ -574,6 +578,11 @@ var resolumeActionRefVocabulary = map[string][]resolumeRefParam{
 	ShowActionResolumeSetLayerMaster: {
 		{Name: "layer", Kind: resolumeRefString, Required: true},
 		{Name: "master", Kind: resolumeRefNumber, Required: true},
+	},
+	ShowActionResolumeFadeLayer: {
+		{Name: "layer", Kind: resolumeRefString, Required: true},
+		{Name: "targetPercent", Kind: resolumeRefNumber, Required: true},
+		{Name: "durationMs", Kind: resolumeRefNumber, Required: false},
 	},
 }
 
@@ -1562,6 +1571,9 @@ func decodeResolumeRefValue(p resolumeRefParam, raw json.RawMessage, field strin
 // and forbidden when it is. No other action in this vocabulary has a
 // conditional key.
 func validateResolumeRefConditionals(action string, ref map[string]any) *ValidationError {
+	if action == ShowActionResolumeFadeLayer {
+		return validateResolumeFadeLayerRef(ref)
+	}
 	if action != ShowActionResolumeLaunchClip {
 		return nil
 	}
@@ -1577,6 +1589,23 @@ func validateResolumeRefConditionals(action string, ref map[string]any) *Validat
 		return &ValidationError{
 			Code: ValidationCodeFieldRequired, Field: "target.ref.deck",
 			Detail: `target.ref.deck is required unless target.ref.persistent is true`,
+		}
+	}
+	return nil
+}
+
+// validateResolumeFadeLayerRef range-checks fadeLayer's target and duration.
+func validateResolumeFadeLayerRef(ref map[string]any) *ValidationError {
+	if target, _ := ref["targetPercent"].(float64); target < 0 || target > 100 {
+		return &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "target.ref.targetPercent",
+			Detail: fmt.Sprintf("The fade target %g is outside 0 to 100. Enter a target from 0 to 100.", target),
+		}
+	}
+	if d, ok := ref["durationMs"].(float64); ok && (d < 0 || d != float64(int64(d))) {
+		return &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "target.ref.durationMs",
+			Detail: fmt.Sprintf("The fade time %g is not a whole number of milliseconds of zero or more. Enter a whole number.", d),
 		}
 	}
 	return nil
@@ -1610,7 +1639,7 @@ func ResolveResolumeRef(action string, ref map[string]any, resolver ResolumeRefe
 		layer, _ := ref["layer"].(string)
 		persistent, _ := ref["persistent"].(bool)
 		return resolver.ResolveClip(ResolumeClipReference{Clip: clip, Deck: deck, Persistent: persistent, Layer: layer})
-	case ShowActionResolumeClearLayer, ShowActionResolumeSetLayerBypass, ShowActionResolumeSetLayerMaster:
+	case ShowActionResolumeClearLayer, ShowActionResolumeSetLayerBypass, ShowActionResolumeSetLayerMaster, ShowActionResolumeFadeLayer:
 		layer, _ := ref["layer"].(string)
 		return resolver.ResolveLayer(layer)
 	case ShowActionResolumeLaunchColumn:

@@ -1694,3 +1694,33 @@ func TestDispatchUnrecognizedActionReturnsError(t *testing.T) {
 }
 
 func idPtr(id ObjectID) *ObjectID { return &id }
+
+func TestFadeLayerStartReadsTheLiveMaster(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	arena.layers[testLayerOne] = &faLayer{bypassedParamID: 9001, masterParamID: 9002, master: 0.4}
+
+	d := newTestActionDispatcher(t, arena, &now, identifiedSnapshot(now))
+	level, reason := d.FadeLayerStart(context.Background(), testLayerOne)
+	if reason != "" || !floatsNearlyEqual(level, 0.4, layerMasterEpsilon) {
+		t.Fatalf("FadeLayerStart = %v, %q, want 0.4 and no refusal", level, reason)
+	}
+}
+
+func TestFadeLayerStartRefusesWhenTheCompositionIsNotConfirmed(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	arena.layers[testLayerOne] = &faLayer{bypassedParamID: 9001, masterParamID: 9002, master: 1}
+	snap := identifiedSnapshot(now)
+	snap.Identity = IdentityFalse
+
+	d := newTestActionDispatcher(t, arena, &now, snap)
+	if _, reason := d.FadeLayerStart(context.Background(), testLayerOne); reason == "" {
+		t.Fatal("FadeLayerStart did not refuse a fade against an unconfirmed composition")
+	}
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	if len(arena.requests) != 0 {
+		t.Errorf("requests = %v, want zero", arena.requests)
+	}
+}

@@ -237,6 +237,8 @@ func cmdResolumeAction(args []string, stdout, stderr io.Writer, clock func() tim
 			"setLayerBypass", "bypassed", "Set a layer's bypass state by name.")
 	case "set-layer-master":
 		return cmdResolumeSetLayerMaster(rest, stdout, stderr, clock)
+	case "fade-layer":
+		return cmdResolumeFadeLayer(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl resolume action: unknown subcommand %q\n\n", sub)
 		printResolumeActionUsage(stderr)
@@ -270,6 +272,8 @@ Subcommands:
   set-layer-bypass <layer name> <true|false>    set a layer's bypass (write)
   set-layer-master <layer name> <value>         set a layer's master to a
                                                  continuous value (write)
+  fade-layer <layer name> <percent>             fade a layer's master over
+                                                 --duration-ms, over OSC (write)
 
 --layer disambiguates a clip name that occurs more than once; --deck and
 --persistent are mutually exclusive and exactly one is required for
@@ -555,4 +559,41 @@ func cmdResolumeSetLayerMaster(args []string, stdout, stderr io.Writer, clock fu
 		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "value must be a number, not %q", rest[1]))
 	}
 	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "setLayerMaster", map[string]any{"layer": layer, "master": value})
+}
+
+// cmdResolumeFadeLayer implements fade-layer: a layer name, a target percent,
+// and an optional fade time, sent to Arena over OSC.
+func cmdResolumeFadeLayer(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	const cmdLabel = "resolume action fade-layer"
+	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
+	durationMs := fs.Int64("duration-ms", 0, "fade time in milliseconds; 0 sets the level at once")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s <layer name> <target percent> [flags]\n\n"+
+			"Fade a layer's master to a percent over --duration-ms, sent over OSC.\n"+
+			"Resolume does not answer OSC, so the result is never confirmed.\nRequires resolume:action.\n", cmdLabel)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	rest := fs.Args()
+	if len(rest) != 2 {
+		fs.Usage()
+		return exitUsage
+	}
+	if rest[0] == "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "layer name must not be empty"))
+	}
+	target, err := strconv.ParseFloat(rest[1], 64)
+	if err != nil || target < 0 || target > 100 {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "target percent must be a number from 0 to 100, not %q", rest[1]))
+	}
+	if *durationMs < 0 {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "--duration-ms must be zero or more"))
+	}
+	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "fadeLayer",
+		map[string]any{"layer": rest[0], "targetPercent": target, "durationMs": *durationMs})
 }

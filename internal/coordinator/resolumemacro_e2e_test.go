@@ -192,7 +192,7 @@ func TestMacroRunResolumeReRunsResolutionAgainstTheCurrentComposition(t *testing
 			}
 
 			svc := identity.NewService(st, time.Now, t.TempDir(), identity.WithLogger(logger))
-			adapter := newResolumeActionDispatcherAdapter(wire.collector)
+			adapter := newResolumeActionDispatcherAdapter(wire.collector, nil)
 			exec := macro.NewExecutor(macro.Dependencies{
 				Store: st, Identity: svc, ResolumeActions: adapter, Clock: time.Now, Logger: logger,
 			}, macro.Options{})

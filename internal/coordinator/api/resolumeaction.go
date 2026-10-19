@@ -264,6 +264,7 @@ var resolumeActionAuditNames = map[string]string{
 	"selectDeck":     "resolume.select_deck",
 	"setLayerBypass": "resolume.set_layer_bypass",
 	"setLayerMaster": "resolume.set_layer_master",
+	"fadeLayer":      "resolume.fade_layer",
 }
 
 // resolumeActionAuditAction returns action's internal audit-action name.
