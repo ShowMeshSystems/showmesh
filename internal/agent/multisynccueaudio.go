@@ -34,6 +34,7 @@ import (
 type cueAudioTriggerEntry struct {
 	CueID string
 	Audio cuecatalog.AudioOutput
+	LTC   *cuecatalog.LTCOutput
 }
 
 // cueAudioTriggerTable maps an FPP sequence filename to the Cue audio it
@@ -59,7 +60,7 @@ func buildCueAudioTriggerTable(entries []cuecatalog.Entry) cueAudioTriggerTable 
 			if filename == "" {
 				continue
 			}
-			table[filename] = cueAudioTriggerEntry{CueID: e.CueID, Audio: *e.Outputs.Audio}
+			table[filename] = cueAudioTriggerEntry{CueID: e.CueID, Audio: *e.Outputs.Audio, LTC: e.Outputs.LTC}
 		}
 	}
 	return table
@@ -413,6 +414,7 @@ func (c *multiSyncCueAudioTrigger) applyMedia(ctx context.Context, mgr *audio.Ma
 			SizeBytes:       sizeBytes,
 			RuntimeFilename: entry.Audio.Filename,
 		}),
+		LTCStartOffset: cueLTCStartOffsetField(mgr, entry.LTC),
 	}
 	outcome := mgr.Apply(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "apply", now), c.revision(now, cueactivation.AudioSessionStepApply), req)
 	return outcome, nil
