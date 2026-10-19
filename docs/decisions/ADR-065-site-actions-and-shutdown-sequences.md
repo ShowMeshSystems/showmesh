@@ -65,40 +65,47 @@ the API and `showmeshctl`.
    action must therefore set a state ("thermal mode: show"), never toggle one.
 
 5. **Power down runs the sequences side by side.** When the night is powered
-   down and playback has stopped, every included sequence starts at once. Steps
-   inside a sequence run in order, honouring delays and confirmation waits. A
-   failed, refused or unconfirmed-when-required step stops that sequence only,
-   so power is never removed after a device that did not confirm it was off.
+   down and playback has stopped, every included sequence starts at once. The
+   global sequences are read as saved at that moment. Steps inside a sequence
+   run in order, honouring delays and confirmation waits. A failed, refused,
+   ambiguous or unconfirmed-when-required step stops that sequence only, so
+   power is never removed after a device that did not confirm it was off. An
+   action deleted since the configuration was saved counts as a failed step.
    Progress is persisted in the night cue outbox, so a coordinator restart
    resumes a wait instead of restarting or skipping it.
 
 6. **End session actions run when the night reaches `stopped`.** That is after
-   power down finishes, or directly when there is no power down, including an
-   operator `end-session`. A failure is reported and the remaining actions still
-   run. They do not run on a hard stop (decision 8).
+   the power down finishes, or when the night is ended without a power down
+   being asked for, such as an operator `end-session`. A night that only faded
+   out waits for its power down. A failed action is reported and the
+   remaining actions still run. They do not run on a hard stop (decision 8).
 
 7. **Emergency stop level 2 (`stop-power-down`) uses the sequences.** Its
-   `show.emergencystop` level gains `skipSequences`. It forces the night's power
-   down as today, runs its included sequences as in decision 5, then its
-   follow-ups, then the night's end session actions. With no night session it
-   runs its included global sequences and its follow-ups.
+   `show.emergencystop` level gains `skipSequences`. With a night open, it
+   forces the night's power down as today, and that power down uses level 2's
+   skip list in place of the night's, plus the night's own sequences; the end
+   session actions follow it. With no night open, level 2 runs its included
+   global sequences itself, with their waits. Its follow-ups run straight
+   after the immediate stop, alongside the sequences.
 
 8. **Emergency stop level 3 (`hard-stop`) ignores every wait.** Its level also
    gains `skipSequences`. After the immediate stop it sends every action step of
-   every included sequence back to back, in sequence order, skipping delays and
-   confirmation waits, then its follow-ups. It runs no end session actions. Hard
-   stop exists for an electrical emergency, where cutting power now matters more
-   than projector lamp cooldown. Follow-ups are not domain-checked, so an
+   every included sequence at once, in step order, skipping delays and
+   confirmation waits, alongside its follow-ups. The open night's own
+   sequences are included. It runs no end session actions. Hard stop exists
+   for an electrical emergency, where cutting power now matters more than
+   projector lamp cooldown. Follow-ups are not domain-checked, so an
    installation may add a work light or a standby mode there.
 
 9. **System power on and off are test commands.** `POST /api/v1/site-power/on`
    runs `powerOnActions` in order. `POST /api/v1/site-power/off` runs every
-   global sequence as in decision 5. Both need `show:emergencystop:invoke`, the scope that can already cut
-   power, are
-   refused while a night session is open, and are reached in the UI from a
-   Testing popup on Live Control and Show Night with a second confirmation.
+   global sequence as in decision 5. Both need `show:emergencystop:invoke`,
+   the scope that can already cut power, are refused while a night session is
+   open or another run is going, and are reached in the UI from a Testing
+   popup on Live Control and Show Night with a second confirmation. Both
+   answer at once and write their results to the audit log when they finish.
    Their progress is held in memory: a coordinator restart abandons the
-   remaining steps and the audit log records that the run was cut short.
+   remaining steps, and the run then has no result entry.
 
 10. **Editing lives in Settings.** A Settings › Emergency stop tab edits the
     three follow-up lists and the two skip lists. A Settings › Site settings
@@ -122,8 +129,9 @@ the API and `showmeshctl`.
   behaviour.
 - Interlocks keep their phases. `presentation-power-on` still gates nothing,
   because system power on is a test command outside a night.
-- A sequence's restart safety depends on where it runs: night and level 2 runs
-  survive a coordinator restart, system power off does not.
+- A sequence's restart safety depends on where it runs: a night's power down,
+  including one level 2 forced, survives a coordinator restart; system power
+  off, level 2 without a night, and hard stop do not.
 
 ## Alternatives considered
 
