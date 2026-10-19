@@ -1648,3 +1648,4 @@ a.sm-tile:hover {
 .sm-action-list__label { font-weight: 600; margin: 0; }
 .sm-action-list__row { display: flex; align-items: flex-end; gap: var(--s-3); }
 .sm-action-list__row > .sm-field { flex: 1; min-width: 0; }
+.sm-action-list + .sm-action-list { margin-top: var(--s-4); }
