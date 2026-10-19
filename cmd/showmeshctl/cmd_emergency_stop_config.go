@@ -20,7 +20,8 @@ import (
 // with its own actions array) has no useful single-flag shorthand.
 
 type configEmergencyStopLevelPayload struct {
-	Actions []string `json:"actions"`
+	Actions       []string `json:"actions"`
+	SkipSequences []string `json:"skipSequences,omitempty"`
 }
 
 type configEmergencyStopPayload struct {
@@ -248,6 +249,6 @@ func cmdEmergencyStopConfigRevisions(args []string, stdout, stderr io.Writer, cl
 func printEmergencyStopConfig(w io.Writer, resp emergencyStopConfigResponse) {
 	_, _ = fmt.Fprintf(w, "show.emergencystop revision %d (source %s)\n", resp.Revision, resp.Source)
 	_, _ = fmt.Fprintf(w, "  stop:            %d follow-up action(s): %v\n", len(resp.Payload.Stop.Actions), resp.Payload.Stop.Actions)
-	_, _ = fmt.Fprintf(w, "  stop-power-down: %d follow-up action(s): %v\n", len(resp.Payload.StopPowerDown.Actions), resp.Payload.StopPowerDown.Actions)
-	_, _ = fmt.Fprintf(w, "  hard-stop:       %d follow-up action(s): %v\n", len(resp.Payload.HardStop.Actions), resp.Payload.HardStop.Actions)
+	_, _ = fmt.Fprintf(w, "  stop-power-down: %d follow-up action(s): %v, skips sequences %v\n", len(resp.Payload.StopPowerDown.Actions), resp.Payload.StopPowerDown.Actions, resp.Payload.StopPowerDown.SkipSequences)
+	_, _ = fmt.Fprintf(w, "  hard-stop:       %d follow-up action(s): %v, skips sequences %v\n", len(resp.Payload.HardStop.Actions), resp.Payload.HardStop.Actions, resp.Payload.HardStop.SkipSequences)
 }

@@ -6233,6 +6233,8 @@ export interface components {
         };
         /** @description One emergency-stop level's own optional, ordered follow-up action list - show.action ids, invoked best-effort, in this order, after that level's own immediate stop. */
         ConfigEmergencyStopLevelPayload: {
+            /** @description Site shutdown sequence ids this level leaves out (ADR-065). Accepted on stopPowerDown and hardStop only; refused on stop. */
+            skipSequences?: string[];
             /** @description Existing show.action ids, of ANY show. Never null - an empty array is how "no follow-up actions" is deliberately configured for this level. The same id may repeat across DIFFERENT levels' own lists, but not twice within one level's own list. */
             actions: string[];
         };
@@ -6646,6 +6648,8 @@ export interface components {
         };
         /** @description The shared result shape every trigger route (stop, stop-power-down, and hard-stop's own fire) answers with. stopOutcomes and followUps are two SEPARATE arrays, deliberately with no combined success flag: a caller's exit code is driven by stopOutcomes alone. NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK THE STOP: reading the configured FPP instance list, the declared audio.node list, the configured Resolume instance list, the night-session step, and reading this level's own follow-up configuration each degrade independently and are reported here rather than turning a stop that could otherwise proceed into a failed response. */
         EmergencyStopResult: {
+            /** @description The site shutdown sequence ids this level started (ADR-065): always empty for stop. Stop and power down runs them with their waits, through the open night's power down when there is one; hard stop sends every action at once and skips every wait. They finish after this response, and their results go to the night session or to the audit log as `show.sitepower.off`. */
+            shutdownSequences: string[];
             /** @enum {string} */
             level: "stop" | "stop-power-down" | "hard-stop";
             idempotencyKey: string;

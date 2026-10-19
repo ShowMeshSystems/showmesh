@@ -276,3 +276,38 @@ func TestNightEndSessionActionsRunAfterPowerDownAndNotAfterHardStop(t *testing.T
 		t.Fatalf("end session action calls after a hard stop = %d, want 0", got)
 	}
 }
+
+func putSingletonConfig(t *testing.T, st *store.Store, kind, payload string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := st.CreateConfigObject(ctx, kind, "default"); err != nil {
+		t.Fatalf("create %s: %v", kind, err)
+	}
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{Kind: kind, ObjectID: "default", Revision: 1, PayloadJSON: payload, Source: "api"}); err != nil {
+		t.Fatalf("create %s revision: %v", kind, err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, kind, "default", 1); err != nil {
+		t.Fatalf("activate %s: %v", kind, err)
+	}
+}
+
+// A power down forced by emergency stop level 2 uses that level's skip
+// list in place of the night's.
+func TestNightPowerOff_EmergencyLevelTwoPicksTheSequences(t *testing.T) {
+	now := time.Date(2026, 10, 31, 23, 0, 0, 0, time.UTC)
+	f := newNightPowerOffFixture(t, &now, &config.NightSiteActions{PowerDown: &config.NightSitePowerDown{SkipSequences: []string{"lights"}}}, map[string]ResolumeActionResult{
+		"launchClip":   resolumeConfirmed("fm off", now),
+		"launchColumn": resolumeConfirmed("lights off", now),
+	}, map[string]string{"fm-off": "launchClip", "lights-off": "launchColumn"})
+	putSingletonConfig(t, f.st, config.ShowSitePowerConfigKind, `{"shutdownSequences":[{"id":"fm","label":"FM","steps":[{"action":"fm-off"}]},{"id":"lights","label":"Lights","steps":[{"action":"lights-off"}]}],"powerOnActions":[]}`)
+	putSingletonConfig(t, f.st, config.ShowEmergencyStopConfigKind, `{"stop":{"actions":[]},"stopPowerDown":{"actions":[],"skipSequences":["fm"]},"hardStop":{"actions":[]}}`)
+
+	rec := mustGetCurrentSession(t, f.st)
+	if err := f.h.nightMarkEmergencySelection(context.Background(), now, rec); err != nil {
+		t.Fatal(err)
+	}
+	f.h.nightAdvancePowerOff(context.Background(), now, rec)
+	if last, ok := f.res.lastCall(); f.res.callCount() != 1 || !ok || last.action != "launchColumn" {
+		t.Fatalf("calls = %d, last = %+v, want only the lights sequence, which level 2 keeps and the night skips", f.res.callCount(), last)
+	}
+}

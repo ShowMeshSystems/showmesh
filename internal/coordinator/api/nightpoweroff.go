@@ -35,6 +35,19 @@ func nightSiteActionName(index int) string { return fmt.Sprintf("action-%d", ind
 // not run, because a hard stop ended it.
 const nightEndSessionSkippedName = "skipped-by-hard-stop"
 
+// nightMarkEmergencySelection records that level 2 forced rec's power down.
+func (h *handlers) nightMarkEmergencySelection(ctx context.Context, now time.Time, rec store.NightSessionRecord) error {
+	resolvedAt := now
+	err := h.deps.NightSessions.InsertNightCueOutboxRow(ctx, store.NightCueOutboxRecord{
+		ID: uuid.NewString(), SessionID: rec.ID, Cycle: rec.Cycle, Phase: nightPhaseShutdownStep, CueName: nightEmergencySelectionName,
+		State: nightCueStateResolved, Outcome: nightCueOutcomeConfirmed, OutcomeReason: "Emergency stop picked the shutdown sequences.", ResolvedAt: &resolvedAt,
+	}, now)
+	if errors.Is(err, store.ErrNightCueOutboxDuplicate) {
+		return nil
+	}
+	return err
+}
+
 // nightSkipEndSessionActions records that rec's end session actions are
 // skipped. A hard stop calls it right after ending the session.
 func (h *handlers) nightSkipEndSessionActions(ctx context.Context, now time.Time, rec store.NightSessionRecord) error {
@@ -56,9 +69,14 @@ type nightScopedSequence struct {
 	seq   config.ShutdownSequence
 }
 
+// nightEmergencySelectionName marks a night whose power down was forced by
+// emergency stop level 2, so that level's skip list picks the sequences.
+const nightEmergencySelectionName = "selected-by-emergency-stop"
+
 // nightPowerDownSequences returns what this night runs at power down: the
-// global sequences saved now, less the ones it skips, then its own.
-func (h *handlers) nightPowerDownSequences(ctx context.Context, payload config.NightSessionPayload) ([]nightScopedSequence, error) {
+// global sequences saved now, less the ones skipped, then its own. The
+// skip list is the night's, or level 2's when level 2 forced the power down.
+func (h *handlers) nightPowerDownSequences(ctx context.Context, rec store.NightSessionRecord, payload config.NightSessionPayload) ([]nightScopedSequence, error) {
 	global, _, _, _, err := h.resolveSitePowerConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -69,6 +87,11 @@ func (h *handlers) nightPowerDownSequences(ctx context.Context, payload config.N
 	if payload.SiteActions != nil && payload.SiteActions.PowerDown != nil {
 		skip = payload.SiteActions.PowerDown.SkipSequences
 		own = payload.SiteActions.PowerDown.AdditionalSequences
+	}
+	if _, merr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseShutdownStep, nightEmergencySelectionName); merr == nil {
+		if es, eerr := h.resolveEmergencyStopPayload(ctx); eerr == nil {
+			skip = es.StopPowerDown.SkipSequences
+		}
 	}
 	for _, s := range config.SequencesExcept(global.ShutdownSequences, skip) {
 		out = append(out, nightScopedSequence{scope: "global", seq: s})
@@ -91,7 +114,7 @@ func (h *handlers) nightAdvancePowerOff(ctx context.Context, now time.Time, rec 
 		h.logWarn("night loop: power down: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
 		return
 	}
-	seqs, err := h.nightPowerDownSequences(ctx, payload)
+	seqs, err := h.nightPowerDownSequences(ctx, rec, payload)
 	if err != nil {
 		h.logWarn("night loop: power down: failed to read the shutdown sequences", "sessionId", rec.ID, "error", err)
 		return

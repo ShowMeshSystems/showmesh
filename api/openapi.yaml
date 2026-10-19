@@ -17371,6 +17371,14 @@ components:
         that level's own immediate stop.
       required: [actions]
       properties:
+        skipSequences:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-z0-9][a-z0-9-]{0,63}$"
+          description: >-
+            Site shutdown sequence ids this level leaves out (ADR-065).
+            Accepted on stopPowerDown and hardStop only; refused on stop.
         actions:
           type: array
           items:
@@ -18315,8 +18323,19 @@ components:
         reading this level's own follow-up configuration each degrade
         independently and are reported here rather than turning a stop
         that could otherwise proceed into a failed response.
-      required: [level, idempotencyKey, stopOutcomes, noInstancesConfigured, followUps]
+      required: [level, idempotencyKey, stopOutcomes, noInstancesConfigured, followUps, shutdownSequences]
       properties:
+        shutdownSequences:
+          type: array
+          items:
+            type: string
+          description: >-
+            The site shutdown sequence ids this level started (ADR-065):
+            always empty for stop. Stop and power down runs them with their
+            waits, through the open night's power down when there is one;
+            hard stop sends every action at once and skips every wait. They
+            finish after this response, and their results go to the night
+            session or to the audit log as `show.sitepower.off`.
         level:
           type: string
           enum: ["stop", "stop-power-down", "hard-stop"]

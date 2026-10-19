@@ -223,7 +223,7 @@ func (h *handlers) nightReachStopped(ctx context.Context, now time.Time, rec sto
 	powerPhase := nightShutdownPowerPhaseNotConfigured
 	if rec.ShutdownIntent == "power-down" {
 		if payload, err := h.getPinnedNightSessionPayload(ctx, rec); err == nil {
-			if seqs, serr := h.nightPowerDownSequences(ctx, payload); serr == nil && len(seqs) > 0 {
+			if seqs, serr := h.nightPowerDownSequences(ctx, rec, payload); serr == nil && len(seqs) > 0 {
 				powerPhase = nightPowerPhaseConfiguredNotDispatched
 			}
 		}
