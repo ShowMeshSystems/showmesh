@@ -977,3 +977,68 @@ func TestMultiSyncCueAudioStartCutsPlayingBackgroundBed(t *testing.T) {
 		t.Fatalf("background bed state after resume = %+v, want playing", snap)
 	}
 }
+
+// TestMultiSyncCueAudioStartUsesEachCuesLTCOffset proves a MultiSync
+// START applies the Cue's own LTC start offset, and that the next Cue's
+// offset replaces it rather than inheriting the earlier one.
+func TestMultiSyncCueAudioStartUsesEachCuesLTCOffset(t *testing.T) {
+	dir := t.TempDir()
+	clk := &fakeClock{t: time.Date(2026, 9, 17, 20, 0, 0, 0, time.UTC)}
+	mgr, fake := newTestAudioManager(t, dir, clk)
+	media := newScriptableClockSource(time.Unix(5_000_000_000, 0))
+	mgr.SetClockSource(media)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+		MultisyncStartLeadMs: 50,
+	})
+	resetTriggerRegistry(t)
+
+	hashA := writeAssetFixture(t, dir, "song-a.wav", []byte("pretend this is song a"))
+	hashB := writeAssetFixture(t, dir, "song-b.wav", []byte("pretend this is song b"))
+	entry := func(cueID, filename, assetID, wav, hash string, ltc *cuecatalog.LTCOutput) cuecatalog.Entry {
+		return cuecatalog.Entry{
+			CueID: cueID, CueRevision: 1,
+			Outputs: cuecatalog.Outputs{
+				Audio: &cuecatalog.AudioOutput{Asset: assetID, Filename: wav, AssetHashes: []string{hash}},
+				LTC:   ltc,
+			},
+			Triggers: []string{filename},
+		}
+	}
+	catalogStore := heldcatalog.NewFileStore(dir)
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{
+		entry("neverender", "neverender.fseq", "song-a-asset", "song-a.wav", hashA, &cuecatalog.LTCOutput{StartOffsetMillis: 4 * 3600 * 1000}),
+		entry("time-warp", "time-warp.fseq", "song-b-asset", "song-b.wav", hashB, &cuecatalog.LTCOutput{StartOffsetMillis: 3600 * 1000}),
+	})
+
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
+	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(clk.now, multisync.Config{}), nil)
+
+	media.setStep(10 * time.Millisecond)
+	start := func(filename string) {
+		t.Helper()
+		clk.advance(time.Second)
+		trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
+			Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeSequence,
+			Filename: filename,
+		})
+	}
+
+	for _, tc := range []struct {
+		filename string
+		want     pkgaudio.LTCTimecode
+	}{
+		{"neverender.fseq", "04:00:00:00"},
+		{"time-warp.fseq", "01:00:00:00"},
+	} {
+		start(tc.filename)
+		spec, requested := fake.LastLTCRequest()
+		if !requested {
+			t.Fatalf("%s: no LTC run was requested", tc.filename)
+		}
+		if spec.StartTimecode != tc.want {
+			t.Fatalf("%s: LTC start timecode = %s, want %s", tc.filename, spec.StartTimecode, tc.want)
+		}
+	}
+}

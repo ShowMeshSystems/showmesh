@@ -131,6 +131,19 @@ func resolveLTCStartOffsetTimecode(mgr *audio.Manager, startOffsetMillis int) (p
 	return tc, true
 }
 
+// cueLTCStartOffsetField is the LTC start offset a Cue's apply sets on the
+// show session: the Cue's own offset, or null so the previous Cue's offset
+// never carries over to a Cue that declares none.
+func cueLTCStartOffsetField(mgr *audio.Manager, ltc *cuecatalog.LTCOutput) pkgaudio.Field[pkgaudio.LTCTimecode] {
+	if ltc == nil {
+		return pkgaudio.NullField[pkgaudio.LTCTimecode]()
+	}
+	if tc, ok := resolveLTCStartOffsetTimecode(mgr, ltc.StartOffsetMillis); ok {
+		return pkgaudio.SetField(tc)
+	}
+	return pkgaudio.NullField[pkgaudio.LTCTimecode]()
+}
+
 // announcementMixPolicy maps [cuecatalog.AnnouncementOutput.Policy]
 // (already validated at authoring time — config/showcue.go's
 // showCueAnnouncementPolicies is exactly [pkgaudio.MixPolicy]'s own
@@ -270,11 +283,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 	if mixPolicy != nil {
 		req.MixPolicy = pkgaudio.SetField(*mixPolicy)
 	}
-	if ltc != nil {
-		if tc, ok := resolveLTCStartOffsetTimecode(mgr, ltc.StartOffsetMillis); ok {
-			req.LTCStartOffset = pkgaudio.SetField(tc)
-		}
-	}
+	req.LTCStartOffset = cueLTCStartOffsetField(mgr, ltc)
 
 	applyOutcome := mgr.Apply(ctx, id, activationInvocation(act, "apply"), activationRevision(revisionAt, activationStepApply), req)
 	if audioOutcomeFailed(applyOutcome) {
