@@ -121,7 +121,7 @@ func sitePowerArgs(cmdLabel string, args []string, stderr io.Writer, extra func(
 }
 
 func cmdSitePowerGet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
-	const cmdLabel = "showmeshctl sitepower get"
+	const cmdLabel = "sitepower get"
 	g, code, ok := sitePowerArgs(cmdLabel, args, stderr, nil)
 	if !ok {
 		return code
@@ -140,7 +140,7 @@ func cmdSitePowerGet(args []string, stdout, stderr io.Writer, clock func() time.
 }
 
 func cmdSitePowerSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
-	const cmdLabel = "showmeshctl sitepower set"
+	const cmdLabel = "sitepower set"
 	var file string
 	var ifMatchFlag func() (int64, bool)
 	var forceFlag func() bool
@@ -180,6 +180,10 @@ func cmdSitePowerSet(args []string, stdout, stderr io.Writer, clock func() time.
 	if err != nil {
 		return reportError(stderr, cmdLabel, err)
 	}
+	// Nothing saved yet is revision 0, which If-Match cannot name.
+	if ifMatch == ifMatchHeaderValue(0) {
+		ifMatch = ""
+	}
 	var out json.RawMessage
 	if err := c.putJSON(ctx, sitePowerConfigPath, ifMatch, json.RawMessage(raw), &out); err != nil {
 		return reportError(stderr, cmdLabel, err)
@@ -188,7 +192,7 @@ func cmdSitePowerSet(args []string, stdout, stderr io.Writer, clock func() time.
 }
 
 func cmdSitePowerRevisions(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
-	const cmdLabel = "showmeshctl sitepower revisions"
+	const cmdLabel = "sitepower revisions"
 	g, code, ok := sitePowerArgs(cmdLabel, args, stderr, nil)
 	if !ok {
 		return code
@@ -215,7 +219,7 @@ func cmdSitePowerRevisions(args []string, stdout, stderr io.Writer, clock func()
 }
 
 func cmdSitePowerRun(args []string, which string, stdout, stderr io.Writer, clock func() time.Time) int {
-	cmdLabel := "showmeshctl sitepower " + which
+	cmdLabel := "sitepower " + which
 	g, code, ok := sitePowerArgs(cmdLabel, args, stderr, nil)
 	if !ok {
 		return code
