@@ -8176,6 +8176,8 @@ export interface components {
             interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
             /** @description Optional. How long the lights take to fade out, finishing as each show starts, the first show after pre-show included. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
             lightsFadeOutMs?: number;
+            /** @description Optional. How long Fade Out Night fades the lights before it stops FPP. Left out means lightsFadeOutMs is used. */
+            fadeOutNightMs?: number;
             /** @description Optional. How long the lights take to fade in, starting when the resting playlist starts after a show. Left out means no fade. */
             lightsFadeInMs?: number;
         };
@@ -8194,6 +8196,8 @@ export interface components {
             interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
             /** @description Optional. How long the lights take to fade out, finishing as each show starts, the first show after pre-show included. Left out means no fade. Needs no cue or action: the coordinator writes the transition gain on the resting and show FPP instances. */
             lightsFadeOutMs?: number;
+            /** @description Optional. How long Fade Out Night fades the lights before it stops FPP. Left out means lightsFadeOutMs is used. */
+            fadeOutNightMs?: number;
             /** @description Optional. How long the lights take to fade in, starting when the resting playlist starts after a show. Left out means no fade. */
             lightsFadeInMs?: number;
         };
