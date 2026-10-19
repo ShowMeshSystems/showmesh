@@ -799,7 +799,7 @@ func (h *handlers) dispatchBlackAndSilence(ctx context.Context, now time.Time, n
 		return
 	}
 	for _, nodeID := range nodeIDs {
-		h.dispatchBlackAndSilenceBlackoutSurfaces(ctx, now, nodeID, issuer, episode)
+		h.dispatchBlackAndSilenceBlackoutSurfaces(ctx, now, nodeID, issuer, episode, nil)
 		h.dispatchBlackAndSilenceAudioStop(ctx, now, nodeID, issuer, episode)
 	}
 }
@@ -813,13 +813,19 @@ func (h *handlers) dispatchBlackAndSilence(ctx context.Context, now time.Time, n
 // scoped target that must black out render surfaces WITHOUT also stopping
 // every audio session on the node, which dispatchBlackAndSilence's own
 // node-wide effect always does.
-func (h *handlers) dispatchBlackAndSilenceBlackoutSurfaces(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, episode string) {
+// superseded, when non-nil, is checked before each surface and stops the
+// remaining blackouts once it reports true.
+func (h *handlers) dispatchBlackAndSilenceBlackoutSurfaces(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, episode string, superseded func() bool) {
 	surfaceIDs, err := surfaceIDsForNodeAnyShow(ctx, h.deps.Config, nodeID)
 	if err != nil {
 		h.logWarn("cue activation loop: resolve surfaces for blackAndSilence failed", "nodeId", nodeID, "error", err)
 		return
 	}
 	for _, surfaceID := range surfaceIDs {
+		if superseded != nil && superseded() {
+			h.logDebug("cue activation loop: blackout skipped because a newer cue was activated on this node", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode)
+			return
+		}
 		in := renderDispatchInput{
 			Action: "render.surface.blackout", NodeID: nodeID, SurfaceID: surfaceID,
 			Params:         map[string]any{"surfaceId": surfaceID},
@@ -880,16 +886,34 @@ func (h *handlers) dispatchCueScopedBlackAndSilence(ctx context.Context, now tim
 		return
 	}
 	for _, target := range targets {
+		superseded := func() bool { return h.nodeActivatedSince(ctx, target.NodeID, now) }
 		if target.Outputs.Render != nil {
-			h.dispatchBlackAndSilenceBlackoutSurfaces(ctx, now, target.NodeID, issuer, episode)
+			h.dispatchBlackAndSilenceBlackoutSurfaces(ctx, now, target.NodeID, issuer, episode, superseded)
 		}
-		if target.Outputs.Audio != nil {
+		if target.Outputs.Audio != nil && !superseded() {
 			h.dispatchBlackAndSilenceAudioStopSession(ctx, now, target.NodeID, cueactivation.AudioSessionID, issuer, episode)
 		}
-		if target.Outputs.Announcement != nil {
+		if target.Outputs.Announcement != nil && !superseded() {
 			h.dispatchBlackAndSilenceAudioStopSession(ctx, now, target.NodeID, cueactivation.AnnouncementSessionID, issuer, episode)
 		}
 	}
+}
+
+// nodeActivatedSince reports whether a cue.activate was created for nodeID
+// after since. A cue-scoped stop must not black or silence outputs a newer
+// cue, such as the resting render, already owns.
+func (h *handlers) nodeActivatedSince(ctx context.Context, nodeID string, since time.Time) bool {
+	if h.deps.Commands == nil {
+		return false
+	}
+	last, err := h.deps.Commands.GetLatestCommandByTargetAction(ctx, "node", nodeID, "cue.activate")
+	if err != nil {
+		if !errors.Is(err, store.ErrCommandNotFound) {
+			h.logWarn("cue activation loop: read last dispatched activation for a cue-scoped stop failed", "nodeId", nodeID, "error", err)
+		}
+		return false
+	}
+	return last.CreatedAt.After(since)
 }
 
 // dispatchBlackAndSilenceAudioStop stops every session in
