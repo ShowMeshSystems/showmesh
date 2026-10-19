@@ -20,6 +20,7 @@ import (
 
 const (
 	nightLightsStepFadeOut  = "lights-out"
+	nightLightsStepNightOut = "lights-out-night"
 	nightLightsStepShowGain = "lights-show"
 	nightLightsStepDark     = "lights-in-dark"
 	nightLightsStepFadeIn   = "lights-in"

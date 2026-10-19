@@ -225,6 +225,7 @@ func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *
 				n.host.setPlaying(body.Args[0], 0)
 			}
 		case "Stop Now":
+			n.record("stop")
 			n.host.setIdle()
 		}
 		w.WriteHeader(http.StatusOK)
@@ -1354,5 +1355,37 @@ func TestLightsFade_FailuresAreReportedOncePerEpisode(t *testing.T) {
 	n.h.lights().wait()
 	if got := len(n.failedEvents()); got != 2 {
 		t.Fatalf("a failure after a success is a new episode and reports again, got %d", got)
+	}
+}
+
+func TestLightsFade_FadeOutNightFadesTheLightsBeforeTheStop(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeOutMs": 20000, `)
+	n.openToFirstShow()
+	n.endShowIntoResting()
+	n.host.setPlaying("halloween-resting", 0)
+	before := len(n.events())
+
+	mustNightCommand(t, n.api, n.token, "fade-out-night")
+	n.tick()
+	n.tick()
+	if got := joined(n.events()[before:]); got != "gain:player-01:0:20s" {
+		t.Fatalf("fade-out-night must fade the lights to 0 over 20s before anything else, got %v", got)
+	}
+
+	n.advance(19 * time.Second)
+	n.tick()
+	if eventIndex(n.events()[before:], "stop") >= 0 {
+		t.Fatalf("FPP was stopped before the fade finished: %v", n.events()[before:])
+	}
+
+	n.advance(2 * time.Second)
+	for i := 0; i < 5 && n.session().State != nightStateStopped; i++ {
+		n.tick()
+		n.advance(time.Second)
+	}
+	n.mustState("night ended", nightStateStopped)
+	n.tick()
+	if got := joined(n.events()[before:]); got != "gain:player-01:0:20s,stop,gain:player-01:100:0s" {
+		t.Fatalf("fade-out-night events = %v, want the fade, then the stop, then the gain restored", got)
 	}
 }
