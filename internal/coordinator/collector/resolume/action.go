@@ -27,6 +27,9 @@ const (
 	ActionSelectDeck     ActionName = "selectDeck"
 	ActionSetLayerBypass ActionName = "setLayerBypass"
 	ActionSetLayerMaster ActionName = "setLayerMaster"
+	// ActionFadeLayer is registered here for its safety class only. It is
+	// sent over OSC by internal/coordinator/oscfade, never by this package.
+	ActionFadeLayer ActionName = "fadeLayer"
 )
 
 // ActionSafetyClass records whether an action is ADR-024 decision 11's named
@@ -80,6 +83,7 @@ var actionRegistry = []ActionDescriptor{
 	{Name: ActionSelectDeck, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionSetLayerBypass, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionSetLayerMaster, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
+	{Name: ActionFadeLayer, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 }
 
 // actionSafetyClass returns name's declared class, or
@@ -309,6 +313,8 @@ func (d *ActionDispatcher) Dispatch(ctx context.Context, name ActionName, params
 		outcome = d.dispatchSetLayerBypass(ctx, w, params)
 	case ActionSetLayerMaster:
 		outcome = d.dispatchSetLayerMaster(ctx, w, params)
+	case ActionFadeLayer:
+		return refusedOutcome(name, "A layer fade is sent over OSC, not through Resolume's web API, so it was not sent here."), nil
 	default:
 		return ActionOutcome{}, fmt.Errorf("resolume: dispatch: unrecognized action %q", name)
 	}

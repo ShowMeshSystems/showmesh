@@ -15513,6 +15513,13 @@ components:
           type: string
         url:
           type: string
+        oscPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: >-
+            Arena's OSC input port on the url's host, used by fadeLayer
+            (ADR-064). Absent means 7000, Arena's default.
     ConfigResolumeInstancesPayload:
       type: object
       description: >-
@@ -16438,7 +16445,7 @@ components:
           type: string
           enum:
             [launchClip, clearLayer, blackout, launchColumn, selectDeck,
-             setLayerBypass, setLayerMaster]
+             setLayerBypass, setLayerMaster, fadeLayer]
         params:
           type: array
           items:
@@ -16486,6 +16493,7 @@ components:
           blackout: "#/components/schemas/ResolumeBlackoutActionRequest"
           setLayerBypass: "#/components/schemas/ResolumeSetLayerBypassActionRequest"
           setLayerMaster: "#/components/schemas/ResolumeSetLayerMasterActionRequest"
+          fadeLayer: "#/components/schemas/ResolumeFadeLayerActionRequest"
       oneOf:
         - $ref: "#/components/schemas/ResolumeLaunchClipActionRequest"
         - $ref: "#/components/schemas/ResolumeClearLayerActionRequest"
@@ -16494,6 +16502,7 @@ components:
         - $ref: "#/components/schemas/ResolumeBlackoutActionRequest"
         - $ref: "#/components/schemas/ResolumeSetLayerBypassActionRequest"
         - $ref: "#/components/schemas/ResolumeSetLayerMasterActionRequest"
+        - $ref: "#/components/schemas/ResolumeFadeLayerActionRequest"
     ResolumeLaunchClipActionRequest:
       type: object
       description: >-
@@ -16680,6 +16689,39 @@ components:
               description: >-
                 The requested master value. Commonly [0, 1] but validated
                 against the layer's own declared range, not assumed.
+    ResolumeFadeLayerActionRequest:
+      type: object
+      description: >-
+        `action: "fadeLayer"`: ramps a layer's master fader to targetPercent
+        over durationMs, sent to Arena's OSC input (ADR-064). The call
+        returns once the fade starts. OSC sends no reply, so a sent fade is
+        always `unconfirmable`, never `confirmed`. A newer fade on the same
+        layer replaces a running one.
+      required: [action, idempotencyKey, params]
+      properties:
+        action:
+          type: string
+          const: fadeLayer
+        idempotencyKey:
+          type: string
+        params:
+          type: object
+          required: [layer, targetPercent]
+          additionalProperties: false
+          properties:
+            layer:
+              type: string
+              minLength: 1
+              description: The layer's own label - its authored name, or its generated form if unnamed.
+            targetPercent:
+              type: number
+              minimum: 0
+              maximum: 100
+              description: The master level to fade to, in percent.
+            durationMs:
+              type: integer
+              minimum: 0
+              description: How long the fade takes. Absent or 0 sets the level at once.
     ResolumeActionResponse:
       type: object
       description: The body of a successful (200) response from POST /resolume/actions.
@@ -19497,9 +19539,9 @@ components:
         action:
           type: string
           description: >-
-            resolume-only: one of the seven Track D D-3 action names
+            resolume-only: one of the Resolume action names
             (launchClip, clearLayer, blackout, launchColumn, selectDeck,
-            setLayerBypass, setLayerMaster).
+            setLayerBypass, setLayerMaster, fadeLayer).
           minLength: 1
         ref:
           type: object

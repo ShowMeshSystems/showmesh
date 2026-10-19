@@ -1179,8 +1179,9 @@ type FPPEndpointsConfigResponse struct {
 // comment says why — even though Track G seam G-2 enforces at most one
 // element at write time.
 type ConfigResolumeInstance struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+	OSCPort int    `json:"oscPort,omitempty"`
 }
 
 // ConfigResolumeInstancesPayload is the "resolume.instances" configuration

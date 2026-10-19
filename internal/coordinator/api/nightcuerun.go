@@ -218,7 +218,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 		if !h.nightCueMayDispatch(ctx, rec, phase) {
 			return row, errNightCueSessionMoved
 		}
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, h.nightAnnouncementDeclaredTarget(ctx, rec, cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, h.nightCueTarget(ctx, rec, phase, cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
 
 	case nightCueStateDispatched:
 		action, err := nightResolveShowActionRevision(ctx, h.deps.Config, cue.Action, row.ActionRevision)
@@ -247,7 +247,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 		if !h.nightCueMayDispatch(ctx, rec, phase) {
 			return row, errNightCueSessionMoved
 		}
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, h.nightAnnouncementDeclaredTarget(ctx, rec, cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, h.nightCueTarget(ctx, rec, phase, cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
 
 	default:
 		return store.NightCueOutboxRecord{}, fmt.Errorf("api: night cue outbox row %s/%d/%s/%s has unrecognized state %q", rec.ID, rec.Cycle, phase, cue.Name, row.State)
@@ -310,7 +310,7 @@ func (h *handlers) nightRunCue(ctx context.Context, now time.Time, rec store.Nig
 	if !h.nightCueMayDispatch(ctx, rec, phase) {
 		return store.NightCueOutboxRecord{}, errNightCueSessionMoved
 	}
-	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, h.nightAnnouncementDeclaredTarget(ctx, rec, cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
+	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, h.nightCueTarget(ctx, rec, phase, cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
 }
 
 // nightCueMayDispatch re-reads the session before an enter-show or

@@ -128,10 +128,10 @@ func TestMapActionSafetyClassFailsLoudlyOnUndeclared(t *testing.T) {
 // (resolumeaction_test.go) necessarily is, since that package does not
 // import resolume in production code.
 func TestAdapterActionsMatchesADR024Decision11ExactlyThroughTheRealRegistry(t *testing.T) {
-	adapter := newResolumeActionDispatcherAdapter(nil)
+	adapter := newResolumeActionDispatcherAdapter(nil, nil)
 	descriptors := adapter.Actions()
-	if len(descriptors) != 7 {
-		t.Fatalf("len(Actions()) = %d, want 7", len(descriptors))
+	if len(descriptors) != 8 {
+		t.Fatalf("len(Actions()) = %d, want 8", len(descriptors))
 	}
 
 	wantExempt := map[string]bool{"blackout": true, "clearLayer": true}
@@ -162,7 +162,7 @@ func TestAdapterActionsMatchesADR024Decision11ExactlyThroughTheRealRegistry(t *t
 // (cmd/showmeshctl/cmd_resolume_action.go, api/openapi.yaml) rather than
 // inventing a new one.
 func TestAdapterActionsParamsVocabularyMatchesTheShippedWireContract(t *testing.T) {
-	adapter := newResolumeActionDispatcherAdapter(nil)
+	adapter := newResolumeActionDispatcherAdapter(nil, nil)
 	byName := map[string][]api.ResolumeActionParam{}
 	for _, d := range adapter.Actions() {
 		byName[d.Name] = d.Params
@@ -374,5 +374,15 @@ func TestBuildResolumeActionParamsBlackoutTakesNoID(t *testing.T) {
 	}
 	if params != (resolume.ActionParams{}) {
 		t.Errorf("params = %+v, want the zero value", params)
+	}
+}
+
+// TestAdapterFadeLayerRefusesWithoutAnOSCAddress proves fadeLayer never falls
+// back to Arena's REST API when no OSC sender exists.
+func TestAdapterFadeLayerRefusesWithoutAnOSCAddress(t *testing.T) {
+	adapter := newResolumeActionDispatcherAdapter(nil, nil)
+	res := adapter.dispatchFadeLayer(map[string]any{"layer": "Video", "targetPercent": float64(0)}, nil)
+	if res.Outcome != api.ResolumeOutcomeRefused || res.Dispatched {
+		t.Fatalf("result = %+v, want refused and not dispatched", res)
 	}
 }

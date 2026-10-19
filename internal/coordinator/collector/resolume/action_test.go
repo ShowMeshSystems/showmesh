@@ -16,9 +16,9 @@ import (
 
 // --- The registry -----------------------------------------------------
 
-func TestActionRegistryHasExactlySevenEntries(t *testing.T) {
-	if got, want := len(actionRegistry), 7; got != want {
-		t.Fatalf("len(actionRegistry) = %d, want %d — TRACK-D-D3-SPEC.md §2's table has exactly seven actions", got, want)
+func TestActionRegistryHasExactlyEightEntries(t *testing.T) {
+	if got, want := len(actionRegistry), 8; got != want {
+		t.Fatalf("len(actionRegistry) = %d, want %d: TRACK-D-D3-SPEC.md §2's seven actions plus ADR-064's fadeLayer", got, want)
 	}
 }
 
@@ -26,7 +26,7 @@ func TestActionRegistryNamesMatchTheSpecTable(t *testing.T) {
 	want := map[ActionName]bool{
 		ActionLaunchClip: true, ActionClearLayer: true, ActionBlackout: true,
 		ActionLaunchColumn: true, ActionSelectDeck: true,
-		ActionSetLayerBypass: true, ActionSetLayerMaster: true,
+		ActionSetLayerBypass: true, ActionSetLayerMaster: true, ActionFadeLayer: true,
 	}
 	seen := map[ActionName]bool{}
 	for _, e := range actionRegistry {
@@ -35,7 +35,7 @@ func TestActionRegistryNamesMatchTheSpecTable(t *testing.T) {
 		}
 		seen[e.Name] = true
 		if !want[e.Name] {
-			t.Errorf("action %q is not one of TRACK-D-D3-SPEC.md §2's seven names", e.Name)
+			t.Errorf("action %q is not one of the registered action names", e.Name)
 		}
 	}
 	for name := range want {

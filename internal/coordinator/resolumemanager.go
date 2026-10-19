@@ -27,7 +27,9 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/oscfade"
 	"log/slog"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -133,6 +135,7 @@ type resolumeBundle struct {
 	wiring          resolumeWiring
 	actions         *resolumeActionDispatcherAdapter
 	recoveryAdapter *resolumeRecoveryAdapter
+	osc             *oscfade.Fader
 	cancel          context.CancelFunc
 }
 
@@ -260,10 +263,14 @@ func (m *resolumeManager) buildBundle(ctx context.Context, inst config.ResolumeI
 	recoveryDispatcher := resolume.NewActionDispatcher(wiring.collector, resolume.ActionDispatcherOptions{})
 	recovery, recoveryAdapter := newResolumeRecoveryWiring(m.st, m.identitySvc, wiring.collector, recoveryDispatcher, m.baseCfg.ResolumeRecoverySettle, m.logger, m.notify)
 	recoveryHolder.Store(recovery)
-	actions := newResolumeActionDispatcherAdapter(wiring.collector)
+	var osc *oscfade.Fader
+	if u, err := url.Parse(inst.URL); err == nil && u.Hostname() != "" {
+		osc = oscfade.New(u.Hostname(), inst.OSCPort)
+	}
+	actions := newResolumeActionDispatcherAdapter(wiring.collector, osc)
 
 	bundleCtx, cancel := context.WithCancel(ctx)
-	b := &resolumeBundle{instance: inst, wiring: wiring, actions: actions, recoveryAdapter: recoveryAdapter, cancel: cancel}
+	b := &resolumeBundle{instance: inst, wiring: wiring, actions: actions, recoveryAdapter: recoveryAdapter, osc: osc, cancel: cancel}
 
 	m.wg.Add(1)
 	go func() {
@@ -282,6 +289,9 @@ func (m *resolumeManager) buildBundle(ctx context.Context, inst config.ResolumeI
 // shutdown clean without holding m.mu for the duration of that wait.
 func (m *resolumeManager) stopCurrentLocked() {
 	m.bundle.cancel()
+	if m.bundle.osc != nil {
+		m.bundle.osc.Close()
+	}
 	m.runner.Remove(m.bundle.instance.ID)
 	m.bundle = nil
 }
