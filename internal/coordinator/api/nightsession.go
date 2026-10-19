@@ -375,6 +375,9 @@ func mapConfigNightSession(p config.NightSessionPayload) v1.ConfigNightSession {
 		Interlocks:                mapConfigNightSessionInterlocks(p.Interlocks),
 		LightsFadeOutMs:           p.LightsFadeOutMs,
 		LightsFadeInMs:            p.LightsFadeInMs,
+		FadeOutNightMs:            p.FadeOutNightMs,
+		RenderFadeOutMs:           p.RenderFadeOutMs,
+		RenderFadeInMs:            p.RenderFadeInMs,
 	}
 }
 

@@ -48,6 +48,11 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseFadeOut, nightFadeOutCues(payload.EnterShow.Cues), payload)
 
 	hold := time.Duration(payload.EnterShow.BlackoutHoldMs) * time.Millisecond
+	if ms := nightRenderFadeOutNightMs(payload); ms != nil {
+		fade := time.Duration(*ms) * time.Millisecond
+		h.nightRenderFade(ctx, now, rec, "out-night", 0, time.Time{}, rec.StateEnteredAt.Add(fade), 0)
+		hold = max(hold, fade)
+	}
 	if fadeMs := nightFadeOutNightMs(payload); fadeMs != nil {
 		// The stop waits for the lights to reach black, so ending the night fades.
 		fade := time.Duration(*fadeMs) * time.Millisecond

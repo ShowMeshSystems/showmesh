@@ -199,6 +199,14 @@ type handlers struct {
 	// still be running well after that side effect is observed.
 	cueActivationFailToBlackWG sync.WaitGroup
 
+	// nightRenderFadeWG tracks projection fade sends, which never block the
+	// night loop; tests wait on it.
+	nightRenderFadeWG sync.WaitGroup
+
+	// nightRenderFadesSent records the projection fade steps already sent,
+	// keyed by session, cycle and step.
+	nightRenderFadesSent sync.Map
+
 	// emergencyStops counts emergency stops fired since start, so a cue's
 	// show actions still queued can tell a stop happened and hold.
 	emergencyStops atomic.Int64

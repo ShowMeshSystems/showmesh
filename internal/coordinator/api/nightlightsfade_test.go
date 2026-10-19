@@ -46,6 +46,7 @@ type lightsNight struct {
 	delay         func(f nightLightingFade) time.Duration
 	reportedGain  *int64
 	fadeActive    bool
+	renderPub     *fakeRenderPublisher
 }
 
 func (n *lightsNight) record(s string) {
@@ -246,6 +247,8 @@ func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *
 	deps.FPP = &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: srv.URL}}}
 	backend := nightTestAssetBackend(t)
 	deps.AssetBackend = backend
+	n.renderPub = &fakeRenderPublisher{}
+	deps.RenderPublisher = n.renderPub
 	deps = deps.withDefaults()
 
 	api := New(deps, Options{Clock: clock, Logger: testLogger(), NightReadinessMaxAge: time.Hour})
@@ -1407,4 +1410,69 @@ func TestLightsFade_FadeOutNightUsesItsOwnDuration(t *testing.T) {
 	if eventIndex(n.events()[before:], "stop") < 0 {
 		t.Fatalf("FPP was not stopped once the 5s fade finished: %v", n.events()[before:])
 	}
+}
+
+// renderFadesAtFadeOut runs a night to the resting fade-out window opened by
+// lead and returns the projection fades sent from that moment on.
+func renderFadesAtFadeOut(t *testing.T, extra string, lead time.Duration) (*lightsNight, time.Time, []mqttCmdEnvelopeForTest) {
+	t.Helper()
+	oldDeadline, oldPoll := renderCommandConfirmDeadline, renderCommandPollInterval
+	renderCommandConfirmDeadline, renderCommandPollInterval = 50*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { renderCommandConfirmDeadline, renderCommandPollInterval = oldDeadline, oldPoll })
+
+	n := newLightsNight(t, extra)
+	renderPutSurface(t, n.st, "front", "halloween-2026", "render-01")
+	n.openToFirstShow()
+	n.endShowIntoResting()
+	end := n.restingEnd()
+	n.h.nightRenderFadeWG.Wait()
+	n.renderPub.mu.Lock()
+	n.renderPub.payload = nil
+	n.renderPub.mu.Unlock()
+
+	n.advance(end.Add(-lead).Sub(n.now))
+	n.host.setPlaying("halloween-resting", 0)
+	n.tick()
+	n.tick()
+	n.h.nightRenderFadeWG.Wait()
+	n.renderPub.mu.Lock()
+	defer n.renderPub.mu.Unlock()
+	return n, end, append([]mqttCmdEnvelopeForTest(nil), n.renderPub.payload...)
+}
+
+func mustOneRenderFadeOut(t *testing.T, sent []mqttCmdEnvelopeForTest, startsAt, endsAt time.Time) {
+	t.Helper()
+	if len(sent) != 1 {
+		t.Fatalf("projection fades sent at the fade-out = %d, want 1: %+v", len(sent), sent)
+	}
+	p := sent[0].Payload
+	if p.Action != "render.surface.fade" || p.Params["surfaceId"] != "front" || p.Params["targetPercent"] != float64(0) {
+		t.Fatalf("projection fade = %s %v, want render.surface.fade of front to 0", p.Action, p.Params)
+	}
+	if got, want := p.Params["endsAt"], endsAt.UTC().Format(time.RFC3339Nano); got != want {
+		t.Fatalf("projection fade ends at %v, want %v", got, want)
+	}
+	if got, want := p.Params["startsAt"], startsAt.UTC().Format(time.RFC3339Nano); got != want {
+		t.Fatalf("projection fade starts at %v, want %v", got, want)
+	}
+}
+
+func TestLightsFade_ProjectionsFadeOutWithTheLightsAndEndAtTheSameMoment(t *testing.T) {
+	_, end, sent := renderFadesAtFadeOut(t, `"lightsFadeOutMs": 20000, "renderFadeOutMs": 10000, `, 10*time.Second)
+	mustOneRenderFadeOut(t, sent, end.Add(-10*time.Second), end)
+}
+
+func TestLightsFade_ProjectionsFadeOnTheirOwnWhenTheLightsDoNot(t *testing.T) {
+	n, end, sent := renderFadesAtFadeOut(t, `"renderFadeOutMs": 15000, `, 15*time.Second)
+	mustOneRenderFadeOut(t, sent, end.Add(-15*time.Second), end)
+	for _, e := range n.events() {
+		if strings.HasPrefix(e, "gain:") && e != "gain:player-01:100:0s" {
+			t.Fatalf("with no lights fade the lights must not fade, got %q", e)
+		}
+	}
+}
+
+func TestLightsFade_ALongerProjectionFadeOutStartsEarlyAndEndsAtTheBoundary(t *testing.T) {
+	_, end, sent := renderFadesAtFadeOut(t, `"lightsFadeOutMs": 10000, "renderFadeOutMs": 30000, `, 30*time.Second)
+	mustOneRenderFadeOut(t, sent, end.Add(-30*time.Second), end)
 }
