@@ -270,8 +270,8 @@ func printSitePowerConfig(stdout, stderr io.Writer, cmdLabel string, g *globalFl
 	for _, seq := range resp.Payload.ShutdownSequences {
 		_, _ = fmt.Fprintf(stdout, "  sequence %s (%s):\n", seq.ID, seq.Label)
 		for i, st := range seq.Steps {
-			switch {
-			case st.Action == "":
+			switch st.Action {
+			case "":
 				_, _ = fmt.Fprintf(stdout, "    %d. wait %s\n", i+1, time.Duration(st.DelayMs)*time.Millisecond)
 			default:
 				note := ""
