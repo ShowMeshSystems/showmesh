@@ -1408,3 +1408,12 @@ func TestLightsFade_FadeOutNightUsesItsOwnDuration(t *testing.T) {
 		t.Fatalf("FPP was not stopped once the 5s fade finished: %v", n.events()[before:])
 	}
 }
+
+func TestLightsFade_FadeOutNightDurationIsReadBack(t *testing.T) {
+	n := newLightsNight(t, `"fadeOutNightMs": 5000, `)
+	req := newJSONRequest(t, http.MethodGet, "/api/v1/config/night.session/halloween-main", "", map[string]string{"Authorization": "Bearer " + n.token})
+	resp, body := doRawRequest(t, n.api.Handler, req)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"fadeOutNightMs":5000`) {
+		t.Fatalf("GET night.session: status %d, body %s; want fadeOutNightMs 5000", resp.StatusCode, body)
+	}
+}
