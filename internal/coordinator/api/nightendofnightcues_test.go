@@ -159,3 +159,29 @@ func mustPinNightSessionPayload(t *testing.T, st *store.Store, payload config.Ni
 		t.Fatalf("create config revision: %v", err)
 	}
 }
+
+func TestNightEndOfNightNeedsLightsRestore(t *testing.T) {
+	fade := 3000
+	lightingFade := config.NightSessionCue{Name: "lights-up", Role: config.NightSessionCueRoleLighting, Action: "act-up", FadeDurationMs: &fade}
+	for _, tc := range []struct {
+		name   string
+		eon    *config.NightSessionEnterEndOfNight
+		fadeIn *int
+		want   bool
+	}{
+		{"omitted", nil, nil, false},
+		{"resting", &config.NightSessionEnterEndOfNight{Mode: config.NightSessionEndOfNightModeResting}, nil, false},
+		{"none", &config.NightSessionEnterEndOfNight{Mode: config.NightSessionEndOfNightModeNone}, nil, true},
+		{"none with a session fade-in", &config.NightSessionEnterEndOfNight{Mode: config.NightSessionEndOfNightModeNone}, &fade, false},
+		{"custom without a lighting fade", customEndOfNight(nil), nil, true},
+		{"custom with a lighting fade", &config.NightSessionEnterEndOfNight{Mode: config.NightSessionEndOfNightModeCustom, Cues: []config.NightSessionCue{lightingFade}}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := endOfNightTestPayload(tc.eon)
+			payload.LightsFadeInMs = tc.fadeIn
+			if got := nightEndOfNightNeedsLightsRestore(payload); got != tc.want {
+				t.Fatalf("nightEndOfNightNeedsLightsRestore = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
