@@ -25,13 +25,15 @@ import (
 // write it expects, the way a real player takes longer than the tick's own
 // goroutine launch.
 type lightsNight struct {
-	t     *testing.T
-	now   time.Time
-	st    *store.Store
-	h     *handlers
-	api   *API
-	host  *fakeFPPHost
-	token string
+	t   *testing.T
+	now time.Time
+	// clockMu guards now against the projection fade sends, which read the clock from their own goroutines.
+	clockMu sync.Mutex
+	st      *store.Store
+	h       *handlers
+	api     *API
+	host    *fakeFPPHost
+	token   string
 
 	mu            sync.Mutex
 	log           []string
@@ -117,7 +119,11 @@ func (n *lightsNight) publishReportedGain() {
 	n.host.obs.setObs(kept)
 }
 
-func (n *lightsNight) advance(d time.Duration)           { n.now = n.now.Add(d) }
+func (n *lightsNight) advance(d time.Duration) {
+	n.clockMu.Lock()
+	defer n.clockMu.Unlock()
+	n.now = n.now.Add(d)
+}
 func (n *lightsNight) session() store.NightSessionRecord { return mustGetCurrentSession(n.t, n.st) }
 
 func (n *lightsNight) mustState(step, want string) {
@@ -173,7 +179,7 @@ func newLightsNight(t *testing.T, extra string) *lightsNight {
 func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *lightsNight {
 	t.Helper()
 	n := &lightsNight{t: t, now: testNow, awaitShowGain: true, awaitRestGain: strings.Contains(extra, "lightsFadeInMs")}
-	clock := func() time.Time { return n.now }
+	clock := func() time.Time { n.clockMu.Lock(); defer n.clockMu.Unlock(); return n.now }
 	obs := &fakeObservationLister{}
 	n.host = &fakeFPPHost{obs: obs, now: clock}
 
