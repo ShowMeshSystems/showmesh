@@ -371,6 +371,8 @@ func nightLightsStepSummary(step, instanceID string) string {
 	switch step {
 	case nightLightsStepFadeOut:
 		return fmt.Sprintf("The lights on %s did not fade out. Check the brightness on that player.", instanceID)
+	case nightLightsStepNightOut:
+		return fmt.Sprintf("The lights on %s did not fade out before the night ended. Check the brightness on that player.", instanceID)
 	case nightLightsStepDark:
 		return fmt.Sprintf("The lights on %s did not dim before resting. Check the brightness on that player.", instanceID)
 	default:

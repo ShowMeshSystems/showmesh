@@ -1409,6 +1409,24 @@ func TestLightsFade_FadeOutNightUsesItsOwnDuration(t *testing.T) {
 	}
 }
 
+func TestLightsFade_PowerDownDoesNotWaitForTheNightFade(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeOutMs": 20000, `)
+	n.openToFirstShow()
+	n.endShowIntoResting()
+	n.host.setPlaying("halloween-resting", 0)
+	before := len(n.events())
+
+	mustNightCommand(t, n.api, n.token, "power-down-presentation")
+	n.tick()
+	n.tick()
+	if eventIndex(n.events()[before:], "stop") < 0 {
+		t.Fatalf("power-down waited for the night fade before stopping FPP: %v", n.events()[before:])
+	}
+	if strings.Contains(joined(n.events()[before:]), "gain:player-01:0:") {
+		t.Fatalf("power-down faded the lights: %v", n.events()[before:])
+	}
+}
+
 func TestLightsFade_FadeOutNightDurationIsReadBack(t *testing.T) {
 	n := newLightsNight(t, `"fadeOutNightMs": 5000, `)
 	req := newJSONRequest(t, http.MethodGet, "/api/v1/config/night.session/halloween-main", "", map[string]string{"Authorization": "Bearer " + n.token})
