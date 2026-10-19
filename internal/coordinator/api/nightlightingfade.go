@@ -65,7 +65,7 @@ func nightLightingFadeFor(cue config.NightSessionCue, phase string) *nightLighti
 	switch phase {
 	case nightPhaseEnterShow:
 		return &nightLightingFade{TargetPercent: 0, FadeSeconds: fadeSeconds, BeforeAction: true}
-	case nightPhaseEnterResting:
+	case nightPhaseEnterResting, nightPhaseEnterEndOfNight:
 		return &nightLightingFade{TargetPercent: 100, FadeSeconds: fadeSeconds, BeforeAction: false}
 	default:
 		// Any other phase asks for no gain write. Returning nil rather

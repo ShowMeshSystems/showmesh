@@ -363,6 +363,14 @@ func mapNightSessionConfigResponse(now time.Time, rev store.ConfigRevisionRecord
 	}
 }
 
+func mapConfigNightSessionEnterEndOfNight(p config.NightSessionPayload) v1.ConfigNightSessionEnterEndOfNight {
+	out := v1.ConfigNightSessionEnterEndOfNight{Mode: p.EndOfNightMode(), Cues: mapConfigNightSessionCues(nightCustomEndOfNightCues(p))}
+	if p.EnterEndOfNight != nil {
+		out.BlackoutAfterShowMs = p.EnterEndOfNight.BlackoutAfterShowMs
+	}
+	return out
+}
+
 func mapConfigNightSession(p config.NightSessionPayload) v1.ConfigNightSession {
 	return v1.ConfigNightSession{
 		Show: p.Show, Label: p.Label,
@@ -370,6 +378,7 @@ func mapConfigNightSession(p config.NightSessionPayload) v1.ConfigNightSession {
 		Resting:                   mapConfigNightSessionResting(p.Resting),
 		EnterShow:                 v1.ConfigNightSessionEnterShow{Cues: mapConfigNightSessionCues(p.EnterShow.Cues), BlackoutHoldMs: p.EnterShow.BlackoutHoldMs},
 		EnterResting:              v1.ConfigNightSessionEnterResting{Cues: mapConfigNightSessionCues(p.EnterResting.Cues), BlackoutAfterShowMs: p.EnterResting.BlackoutAfterShowMs},
+		EnterEndOfNight:           mapConfigNightSessionEnterEndOfNight(p),
 		AnnouncementDefaultPolicy: p.AnnouncementDefaultPolicy,
 		SiteControl:               mapConfigNightSessionSiteControl(p.SiteControl),
 		Interlocks:                mapConfigNightSessionInterlocks(p.Interlocks),

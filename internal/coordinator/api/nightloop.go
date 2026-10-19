@@ -1148,6 +1148,34 @@ func (h *handlers) nightResolveInstanceUUID(ctx context.Context, instanceID stri
 	return "", false, nil
 }
 
+// nightEndOfNightNeedsLightsRestore reports whether the end of night playlist
+// would otherwise stay at a gain an enter-show cue dimmed: the chosen cues
+// replace the resting ones and none of them, nor the session, fades the lights up.
+func nightEndOfNightNeedsLightsRestore(payload config.NightSessionPayload) bool {
+	if payload.LightsFadeInMs != nil || payload.EndOfNightMode() == config.NightSessionEndOfNightModeResting {
+		return false
+	}
+	for _, cue := range payload.EndOfNightCues() {
+		if cue.Role == config.NightSessionCueRoleLighting && cue.FadeDurationMs != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// nightEnterRestingCues picks the cues and blackout hold for entering
+// resting: enterEndOfNight's after the final show, enterResting otherwise.
+func nightEnterRestingCues(rec store.NightSessionRecord, payload config.NightSessionPayload) (phase string, cues []config.NightSessionCue, blackoutMs int) {
+	if !rec.FinalShowRequested {
+		return nightPhaseEnterResting, payload.EnterResting.Cues, payload.EnterResting.BlackoutAfterShowMs
+	}
+	phase = nightPhaseEnterResting
+	if payload.EndOfNightMode() == config.NightSessionEndOfNightModeCustom {
+		phase = nightPhaseEnterEndOfNight
+	}
+	return phase, payload.EndOfNightCues(), payload.EndOfNightBlackoutAfterShowMs()
+}
+
 func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
 	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
 	if err != nil {
@@ -1174,9 +1202,10 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 	// below: unlike enter-show, no atomic commit boundary or barrier gates
 	// entry into resting on their outcome (RESTING-MODE.md §7.2's ordering
 	// note: "show completion remains the authoritative anchor").
-	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseEnterResting, payload.EnterResting.Cues, payload)
+	phase, cues, holdMs := nightEnterRestingCues(rec, payload)
+	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, phase, cues, payload)
 
-	hold := time.Duration(payload.EnterResting.BlackoutAfterShowMs) * time.Millisecond
+	hold := time.Duration(holdMs) * time.Millisecond
 	if now.Sub(rec.StateEnteredAt) < hold {
 		return
 	}
@@ -1186,6 +1215,9 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 		anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingRepeat, payload.Resting.FPPInstanceID, payload.Resting.EndOfNightPlaylist, payload.Resting.EndOfNightRepeat, 0, fppIfBusyRefuse)
 		if !anchor.DispatchedAt.IsZero() {
 			h.nightLightsFadeIn(ctx, now, rec, payload)
+			if nightEndOfNightNeedsLightsRestore(payload) {
+				h.nightLightsRestore(ctx, now, rec, payload, "end-of-night")
+			}
 		}
 		if !changed {
 			return

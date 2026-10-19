@@ -22176,8 +22176,8 @@ components:
     ConfigNightSessionCue:
       type: object
       description: >-
-        One entry of enterShow.cues or enterResting.cues
-        (RESTING-MODE.md §7). offsetMs is SIGNED and relative to the
+        One entry of enterShow.cues, enterResting.cues or
+        enterEndOfNight.cues (RESTING-MODE.md §7). offsetMs is SIGNED and relative to the
         anchor - negative means before it. action must name an existing
         show.action object in the same show (server-side; not expressible
         here). onFailure defaults to "continue" (ADR-035) when absent.
@@ -22232,6 +22232,51 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ConfigNightSessionCue"
+        blackoutAfterShowMs:
+          type: integer
+          minimum: 0
+    ConfigNightSessionEnterEndOfNight:
+      type: object
+      description: >-
+        night.session.enterEndOfNight (RESTING-MODE.md §7.2), the cues
+        that run after the final show in place of enterResting. Always
+        present on a read. mode "resting" runs the enterResting cues,
+        and is the value when the block was left out on write. mode
+        "none" runs no cues, so only the end of night playlist starts.
+        mode "custom" runs this block's own cues instead of the
+        enterResting cues. cues is empty unless mode is "custom".
+        blackoutAfterShowMs, when absent, is enterResting's own
+        blackoutAfterShowMs.
+      required: [mode, cues]
+      properties:
+        mode:
+          type: string
+          enum: [resting, none, custom]
+        cues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigNightSessionCue"
+        blackoutAfterShowMs:
+          type: integer
+          minimum: 0
+    ConfigNightSessionEnterEndOfNightWrite:
+      type: object
+      description: >-
+        The WRITE shape of night.session.enterEndOfNight. Optional: left
+        out, the final show is followed by the enterResting cues exactly
+        as any other show is. mode is required when the block is present.
+        mode "custom" requires at least one cue. mode "resting" and
+        "none" accept only an empty cues list. blackoutAfterShowMs, when
+        absent, uses enterResting's own blackoutAfterShowMs.
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [resting, none, custom]
+        cues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigNightSessionCueWrite"
         blackoutAfterShowMs:
           type: integer
           minimum: 0
@@ -22608,9 +22653,9 @@ components:
         The WRITE shape of the "night.session" configuration kind's
         payload: the body PUT /config/night.session/{id} accepts.
         Identical to ConfigNightSession except that resting, enterShow,
-        and enterResting carry their own *Write shapes, whose only
-        difference is which of their own fields are optional-with-a-
-        documented-default rather than always required. The response to
+        enterResting and enterEndOfNight carry their own *Write shapes,
+        whose only difference is which of their own fields are
+        optional-with-a-documented-default rather than always required. The response to
         a successful write stores and returns the resolved
         ConfigNightSession shape, never this one - matching
         ConfigShowWrite/ConfigShow's existing precedent one kind over.
@@ -22633,6 +22678,8 @@ components:
           $ref: "#/components/schemas/ConfigNightSessionEnterShowWrite"
         enterResting:
           $ref: "#/components/schemas/ConfigNightSessionEnterRestingWrite"
+        enterEndOfNight:
+          $ref: "#/components/schemas/ConfigNightSessionEnterEndOfNightWrite"
         announcementDefaultPolicy:
           type: string
           enum: [duck, mix, interrupt]
@@ -22689,7 +22736,7 @@ components:
         session's own `show` (ADR-027: a Show is a namespace).
       required:
         [show, label, showPlaylist, resting, enterShow, enterResting,
-         announcementDefaultPolicy]
+         enterEndOfNight, announcementDefaultPolicy]
       properties:
         show:
           type: string
@@ -22705,6 +22752,8 @@ components:
           $ref: "#/components/schemas/ConfigNightSessionEnterShow"
         enterResting:
           $ref: "#/components/schemas/ConfigNightSessionEnterResting"
+        enterEndOfNight:
+          $ref: "#/components/schemas/ConfigNightSessionEnterEndOfNight"
         announcementDefaultPolicy:
           type: string
           enum: [duck, mix, interrupt]
@@ -23071,8 +23120,9 @@ components:
           description: >-
             `fadeOut` replays the `enterShow` cue definitions while the
             session is fading out, under its own outbox identity. Rows in
-            that phase are listed only once they exist.
-          enum: [enterShow, enterResting, fadeOut]
+            that phase are listed only once they exist. `enterEndOfNight`
+            rows exist only when enterEndOfNight.mode is "custom".
+          enum: [enterShow, enterResting, enterEndOfNight, fadeOut]
         role:
           type: string
         action:
