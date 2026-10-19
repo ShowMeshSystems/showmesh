@@ -53,3 +53,17 @@ func nightCheckBrightnessComposition(transition string, cues []config.NightSessi
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy()}
 }
+
+// nightCheckEndOfNightCues states which cues run after the final show, so
+// an operator can see that an omitted block still runs the resting cues.
+func nightCheckEndOfNightCues(payload config.NightSessionPayload) nightReadinessCheck {
+	const name = "enterEndOfNight:cues"
+	switch payload.EndOfNightMode() {
+	case config.NightSessionEndOfNightModeNone:
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "After the last show no cues run, and only the end of night playlist starts."}
+	case config.NightSessionEndOfNightModeCustom:
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("After the last show the %d end of night cues run instead of the resting cues.", len(payload.EnterEndOfNight.Cues))}
+	default:
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "After the last show the resting cues run, because no end of night cues are set."}
+	}
+}

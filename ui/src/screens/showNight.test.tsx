@@ -1302,6 +1302,7 @@ describe('Show Night', () => {
         cues: [{ name: 'Announce', role: 'announcement', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500, announcementPolicy: 'duck' }],
       },
       enterResting: { blackoutAfterShowMs: 0, cues: [] },
+      enterEndOfNight: { mode: 'resting', cues: [] },
       announcementDefaultPolicy: 'duck',
       lightsFadeOutMs: 20000,
       lightsFadeInMs: 8000,
@@ -1433,6 +1434,33 @@ describe('Show Night', () => {
     await screen.findByDisplayValue('Winter Ridge')
     expect(captured.body).not.toHaveProperty('lightsFadeOutMs')
     expect(captured.body?.lightsFadeInMs).toBe(12000)
+  })
+
+  it('sends the cues after the last show as chosen, defaulting to the enter resting cues', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    }
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    expect(screen.getByRole('radio', { name: /Run the enter resting cues/ })).toBeChecked()
+    expect(screen.queryByText('Enter end of night')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: /Run end-of-night cues/ }))
+    expect(screen.getByText('Enter end of night')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    expect(await screen.findByText(/Custom end-of-night cues need at least one cue/)).toBeInTheDocument()
+    expect(captured.body).toBeNull()
+
+    fireEvent.click(screen.getByRole('radio', { name: /Run no cues/ }))
+    fireEvent.change(screen.getByLabelText('Blackout after the last show (ms)'), { target: { value: '3000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    expect(captured.body?.enterEndOfNight).toEqual({ mode: 'none', cues: [], blackoutAfterShowMs: 3000 })
   })
 
   it('sends the background audio subsection with the edited item, repeat, and ceiling', async () => {

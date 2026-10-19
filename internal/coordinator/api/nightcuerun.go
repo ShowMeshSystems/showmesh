@@ -23,6 +23,10 @@ const (
 	nightPhaseEnterShow    = "enterShow"
 	nightPhaseEnterResting = "enterResting"
 
+	// nightPhaseEnterEndOfNight runs enterEndOfNight's custom cues after
+	// the final show, in place of enterResting.
+	nightPhaseEnterEndOfNight = "enterEndOfNight"
+
 	// nightPhaseFadeOut replays the enterShow cue definitions when the
 	// session is fading out. It is its own phase so those rows never
 	// collide with a real enter-show commit in the same cycle.
@@ -317,7 +321,7 @@ func (h *handlers) nightRunCue(ctx context.Context, now time.Time, rec store.Nig
 // enter-resting cue goes out, so a Stop that landed after the tick's read
 // starts nothing. Shutdown phases only remove output and always proceed.
 func (h *handlers) nightCueMayDispatch(ctx context.Context, rec store.NightSessionRecord, phase string) bool {
-	if phase != nightPhaseEnterShow && phase != nightPhaseEnterResting {
+	if phase != nightPhaseEnterShow && phase != nightPhaseEnterResting && phase != nightPhaseEnterEndOfNight {
 		return true
 	}
 	return h.nightSessionUnchanged(ctx, rec)

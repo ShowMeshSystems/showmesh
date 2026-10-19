@@ -296,6 +296,8 @@ export type {
   ConfigNightSessionCueWrite,
   ConfigNightSessionEnterShowWrite,
   ConfigNightSessionEnterRestingWrite,
+  ConfigNightSessionEnterEndOfNight,
+  ConfigNightSessionEnterEndOfNightWrite,
   ConfigNightSessionBackgroundAudioWrite,
   ConfigNightSessionBackgroundAudioInlineWrite,
   ConfigNightSessionBackgroundAudioReferenceWrite,

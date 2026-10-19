@@ -1131,6 +1131,19 @@ func (h *handlers) nightResolveInstanceUUID(ctx context.Context, instanceID stri
 	return "", false, nil
 }
 
+// nightEnterRestingCues picks the cues and blackout hold for entering
+// resting: enterEndOfNight's after the final show, enterResting otherwise.
+func nightEnterRestingCues(rec store.NightSessionRecord, payload config.NightSessionPayload) (phase string, cues []config.NightSessionCue, blackoutMs int) {
+	if !rec.FinalShowRequested {
+		return nightPhaseEnterResting, payload.EnterResting.Cues, payload.EnterResting.BlackoutAfterShowMs
+	}
+	phase = nightPhaseEnterResting
+	if payload.EndOfNightMode() == config.NightSessionEndOfNightModeCustom {
+		phase = nightPhaseEnterEndOfNight
+	}
+	return phase, payload.EndOfNightCues(), payload.EndOfNightBlackoutAfterShowMs()
+}
+
 func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
 	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
 	if err != nil {
@@ -1157,9 +1170,10 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 	// below: unlike enter-show, no atomic commit boundary or barrier gates
 	// entry into resting on their outcome (RESTING-MODE.md §7.2's ordering
 	// note: "show completion remains the authoritative anchor").
-	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseEnterResting, payload.EnterResting.Cues, payload)
+	phase, cues, holdMs := nightEnterRestingCues(rec, payload)
+	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, phase, cues, payload)
 
-	hold := time.Duration(payload.EnterResting.BlackoutAfterShowMs) * time.Millisecond
+	hold := time.Duration(holdMs) * time.Millisecond
 	if now.Sub(rec.StateEnteredAt) < hold {
 		return
 	}
