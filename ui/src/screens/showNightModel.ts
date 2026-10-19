@@ -393,6 +393,7 @@ export type RunStep = {
 const CUE_PHASE: Record<NightCue['phase'], string> = {
   enterShow: 'Enter show',
   enterResting: 'Enter resting',
+  enterEndOfNight: 'Enter end of night',
   fadeOut: 'Fade out',
 }
 

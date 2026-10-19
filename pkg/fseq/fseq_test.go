@@ -1,6 +1,7 @@
 package fseq
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"os"
@@ -399,5 +400,24 @@ func TestOpen_RejectsTruncatedFile(t *testing.T) {
 	var m *ErrMalformed
 	if !errors.As(err, &m) {
 		t.Fatalf("got %v, want *ErrMalformed", err)
+	}
+}
+
+func TestReadTimingReadsOnlyTheHeader(t *testing.T) {
+	hdr := make([]byte, headerSize)
+	copy(hdr, "PSEQ")
+	hdr[7] = 2
+	binary.LittleEndian.PutUint32(hdr[14:18], 7999)
+	hdr[18] = 25
+	frames, step, err := ReadTiming(bytes.NewReader(hdr))
+	if err != nil || frames != 7999 || step != 25 {
+		t.Fatalf("ReadTiming = %d, %d, %v; want 7999, 25, nil", frames, step, err)
+	}
+	if _, _, err := ReadTiming(bytes.NewReader(hdr[:10])); err == nil {
+		t.Fatal("ReadTiming accepted a truncated header")
+	}
+	copy(hdr, "NOPE")
+	if _, _, err := ReadTiming(bytes.NewReader(hdr)); err != ErrNotFSEQ {
+		t.Fatalf("ReadTiming on a non-fseq header = %v, want ErrNotFSEQ", err)
 	}
 }

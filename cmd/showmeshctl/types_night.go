@@ -121,7 +121,8 @@ type nightSessionResting struct {
 	BackgroundAudio    *nightSessionBackgroundAudio `json:"backgroundAudio,omitempty"`
 }
 
-// nightSessionCue is one entry of enterShow.cues or enterResting.cues.
+// nightSessionCue is one entry of enterShow.cues, enterResting.cues or
+// enterEndOfNight.cues.
 type nightSessionCue struct {
 	Name               string  `json:"name"`
 	Role               string  `json:"role"`
@@ -143,6 +144,13 @@ type nightSessionEnterShow struct {
 type nightSessionEnterResting struct {
 	Cues                []nightSessionCue `json:"cues"`
 	BlackoutAfterShowMs int               `json:"blackoutAfterShowMs"`
+}
+
+// nightSessionEnterEndOfNight is night.session.enterEndOfNight.
+type nightSessionEnterEndOfNight struct {
+	Mode                string            `json:"mode"`
+	Cues                []nightSessionCue `json:"cues"`
+	BlackoutAfterShowMs *int              `json:"blackoutAfterShowMs,omitempty"`
 }
 
 // nightSessionPowerBinding is a configured power binding under
@@ -199,19 +207,20 @@ type nightSessionInterlock struct {
 // response. SiteControl and Interlocks are nil/empty on a deployment that
 // omits them (RESTING-MODE.md §10's own opening line).
 type nightSession struct {
-	Show                      string                   `json:"show"`
-	Label                     string                   `json:"label"`
-	ShowPlaylist              nightSessionFPPPlaylist  `json:"showPlaylist"`
-	Resting                   nightSessionResting      `json:"resting"`
-	EnterShow                 nightSessionEnterShow    `json:"enterShow"`
-	EnterResting              nightSessionEnterResting `json:"enterResting"`
-	AnnouncementDefaultPolicy string                   `json:"announcementDefaultPolicy"`
-	SiteControl               *nightSessionSiteControl `json:"siteControl,omitempty"`
-	Interlocks                []nightSessionInterlock  `json:"interlocks,omitempty"`
-	LightsFadeOutMs           *int                     `json:"lightsFadeOutMs,omitempty"`
-	LightsFadeInMs            *int                     `json:"lightsFadeInMs,omitempty"`
-	RenderFadeOutMs           *int                     `json:"renderFadeOutMs,omitempty"`
-	RenderFadeInMs            *int                     `json:"renderFadeInMs,omitempty"`
+	Show                      string                      `json:"show"`
+	Label                     string                      `json:"label"`
+	ShowPlaylist              nightSessionFPPPlaylist     `json:"showPlaylist"`
+	Resting                   nightSessionResting         `json:"resting"`
+	EnterShow                 nightSessionEnterShow       `json:"enterShow"`
+	EnterResting              nightSessionEnterResting    `json:"enterResting"`
+	EnterEndOfNight           nightSessionEnterEndOfNight `json:"enterEndOfNight"`
+	AnnouncementDefaultPolicy string                      `json:"announcementDefaultPolicy"`
+	SiteControl               *nightSessionSiteControl    `json:"siteControl,omitempty"`
+	Interlocks                []nightSessionInterlock     `json:"interlocks,omitempty"`
+	LightsFadeOutMs           *int                        `json:"lightsFadeOutMs,omitempty"`
+	LightsFadeInMs            *int                        `json:"lightsFadeInMs,omitempty"`
+	RenderFadeOutMs           *int                        `json:"renderFadeOutMs,omitempty"`
+	RenderFadeInMs            *int                        `json:"renderFadeInMs,omitempty"`
 }
 
 // nightSessionConfigResponse is the body of GET and PUT

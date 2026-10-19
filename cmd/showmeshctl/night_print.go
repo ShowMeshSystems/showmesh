@@ -68,6 +68,8 @@ func printNightSessionDetail(w io.Writer, resp nightSessionConfigResponse) {
 	printNightSessionCues(w, "Enter-resting cues", p.EnterResting.Cues)
 	_, _ = fmt.Fprintf(w, "  Blackout after show: %dms\n", p.EnterResting.BlackoutAfterShowMs)
 
+	printNightSessionEndOfNight(w, p)
+
 	printNightSessionLightsFades(w, p)
 
 	printNightSessionSiteControl(w, p.SiteControl)
@@ -155,6 +157,23 @@ func printNightSessionInterlocks(w io.Writer, rules []nightSessionInterlock) {
 		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\n", r.Name, r.Phase, r.Posture, r.Signal, r.OnUnavailable, r.OverridePolicy)
 	}
 	_ = tw.Flush()
+}
+
+func printNightSessionEndOfNight(w io.Writer, p nightSession) {
+	e := p.EnterEndOfNight
+	switch e.Mode {
+	case "none":
+		_, _ = fmt.Fprintf(w, "\nAfter the last show: no cues run, only the end-of-night playlist starts.\n")
+	case "custom":
+		printNightSessionCues(w, "After the last show, end-of-night cues", e.Cues)
+	default:
+		_, _ = fmt.Fprintf(w, "\nAfter the last show: the enter-resting cues run, because no end-of-night cues are set.\n")
+	}
+	if e.BlackoutAfterShowMs != nil {
+		_, _ = fmt.Fprintf(w, "  Blackout after the last show: %dms\n", *e.BlackoutAfterShowMs)
+	} else {
+		_, _ = fmt.Fprintf(w, "  Blackout after the last show: %dms, the same as after every show\n", p.EnterResting.BlackoutAfterShowMs)
+	}
 }
 
 func printNightSessionCues(w io.Writer, heading string, cues []nightSessionCue) {

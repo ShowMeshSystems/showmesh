@@ -23,6 +23,7 @@ package fseq
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -107,6 +108,29 @@ type File struct {
 type rawOverlap struct {
 	ovStart, ovEnd uint64
 	srcBase        uint64 // src offset within the frame corresponding to ovStart
+}
+
+// ReadTiming reads only the fixed header from r and returns its frame count
+// and step time, so a caller can learn a sequence's length without the file.
+func ReadTiming(r io.Reader) (frameCount int, stepTimeMS byte, err error) {
+	hdr := make([]byte, headerSize)
+	if _, err := io.ReadFull(r, hdr); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			return 0, 0, &ErrMalformed{Reason: fmt.Sprintf("file is smaller than the %d-byte fixed header", headerSize)}
+		}
+		return 0, 0, err
+	}
+	switch string(hdr[0:4]) {
+	case "PSEQ", "FSEQ":
+	case "ESEQ":
+		return 0, 0, ErrESEQUnsupported
+	default:
+		return 0, 0, ErrNotFSEQ
+	}
+	if hdr[7] != 2 {
+		return 0, 0, &ErrUnsupportedVersion{Major: hdr[7], Minor: hdr[6]}
+	}
+	return int(binary.LittleEndian.Uint32(hdr[14:18])), hdr[18], nil
 }
 
 // Open parses an FSEQ v2 file's header and tables and returns a File

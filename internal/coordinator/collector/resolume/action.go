@@ -27,6 +27,9 @@ const (
 	ActionSelectDeck     ActionName = "selectDeck"
 	ActionSetLayerBypass ActionName = "setLayerBypass"
 	ActionSetLayerMaster ActionName = "setLayerMaster"
+	// ActionFadeLayer is registered here for its safety class only. It is
+	// sent over OSC by internal/coordinator/oscfade, never by this package.
+	ActionFadeLayer ActionName = "fadeLayer"
 )
 
 // ActionSafetyClass records whether an action is ADR-024 decision 11's named
@@ -80,6 +83,7 @@ var actionRegistry = []ActionDescriptor{
 	{Name: ActionSelectDeck, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionSetLayerBypass, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionSetLayerMaster, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
+	{Name: ActionFadeLayer, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 }
 
 // actionSafetyClass returns name's declared class, or
@@ -264,6 +268,25 @@ func (d *ActionDispatcher) CurrentCompositionWithRevision() (*TrackedComposition
 	return tc, revision, err
 }
 
+// FadeLayerStart applies the composition check to a layer fade and reads the
+// layer's live master, the level an OSC fade ramps from.
+func (d *ActionDispatcher) FadeLayerStart(ctx context.Context, layerID ObjectID) (float64, string) {
+	if reason, refuse := d.identityGate(ActionFadeLayer, d.collector.LastSurveySnapshot()); refuse {
+		return 0, reason
+	}
+	rctx, cancel := context.WithTimeout(ctx, MaxBaselinePhaseBudget)
+	defer cancel()
+	layer, _, err := d.readLayer(rctx, layerID)
+	if err != nil || layer.Master.Presence != PresencePresent || layer.Master.Param == nil {
+		return 0, "This layer's level could not be read from Resolume, so the fade was not sent. Retry."
+	}
+	level, ok := layer.Master.Float()
+	if !ok {
+		return 0, "This layer's level came back empty from Resolume, so the fade was not sent. Retry."
+	}
+	return level, ""
+}
+
 // Actions returns [actionRegistry]'s entries, sorted by Name so a discovery
 // endpoint built from them does not depend on Go's slice-literal order.
 func (d *ActionDispatcher) Actions() []ActionDescriptor {
@@ -309,6 +332,8 @@ func (d *ActionDispatcher) Dispatch(ctx context.Context, name ActionName, params
 		outcome = d.dispatchSetLayerBypass(ctx, w, params)
 	case ActionSetLayerMaster:
 		outcome = d.dispatchSetLayerMaster(ctx, w, params)
+	case ActionFadeLayer:
+		return refusedOutcome(name, "A layer fade is sent over OSC, not through Resolume's web API, so it was not sent here."), nil
 	default:
 		return ActionOutcome{}, fmt.Errorf("resolume: dispatch: unrecognized action %q", name)
 	}

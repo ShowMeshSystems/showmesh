@@ -5427,6 +5427,8 @@ export interface components {
         ConfigResolumeInstance: {
             id: string;
             url: string;
+            /** @description Arena's OSC input port on the url's host, used by fadeLayer (ADR-064). Absent means 7000, Arena's default. */
+            oscPort?: number;
         };
         /**
          * @description The "resolume.instances" configuration kind's payload: the body PUT /config/resolume.instances accepts, and the "payload" member of GET /config/resolume.instances' response. instances is never null - an empty configured-instances list is a real, valid state, and it is the only way to deliberately configure zero instances; an absent or null "instances" key on a PUT is a `400`, never a silent wipe. At most one instance is accepted today (enforced by validation, not by this schema - see `PUT /config/resolume.instances`'s own description).
@@ -5815,7 +5817,7 @@ export interface components {
         /** @description One entry of the fixed seven-action vocabulary GET /resolume/actions returns. auditExempt mirrors ADR-024 decision 11's safety class: true only for `blackout` and `clearLayer`. coordinatorRequired is `true` for every entry today - the Resolume adapter is coordinator- hosted and Resolume holds no local fallback - carried on the wire so a macro author never has to know that out of band. */
         ResolumeAction: {
             /** @enum {string} */
-            name: "launchClip" | "clearLayer" | "blackout" | "launchColumn" | "selectDeck" | "setLayerBypass" | "setLayerMaster";
+            name: "launchClip" | "clearLayer" | "blackout" | "launchColumn" | "selectDeck" | "setLayerBypass" | "setLayerMaster" | "fadeLayer";
             params: components["schemas"]["ResolumeActionParam"][];
             auditExempt: boolean;
             coordinatorRequired: boolean;
@@ -5827,7 +5829,7 @@ export interface components {
             actions: components["schemas"]["ResolumeAction"][];
         };
         /** @description The body of POST /resolume/actions - a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against - reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. ADR-037: every reference below is a NAME, resolved against the stored composition - a raw Resolume object id is never accepted anywhere in this union, and a request that still sends one is refused as an unrecognized parameter. */
-        ResolumeActionRequest: components["schemas"]["ResolumeLaunchClipActionRequest"] | components["schemas"]["ResolumeClearLayerActionRequest"] | components["schemas"]["ResolumeLaunchColumnActionRequest"] | components["schemas"]["ResolumeSelectDeckActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"];
+        ResolumeActionRequest: components["schemas"]["ResolumeLaunchClipActionRequest"] | components["schemas"]["ResolumeClearLayerActionRequest"] | components["schemas"]["ResolumeLaunchColumnActionRequest"] | components["schemas"]["ResolumeSelectDeckActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"] | components["schemas"]["ResolumeFadeLayerActionRequest"];
         /** @description `action: "launchClip"`: launches (connects) a clip named by `params.clip`, scoped to exactly one of `params.deck` (a deck clip) or `params.persistent: true` (a persistent clip, which lives outside any deck and carries no `deck`) - `params` below encodes that exclusivity structurally, so a client generated from this contract never constructs the other shapes. A coordinator that receives one anyway (neither or both) does not reject it with `400`: it answers `200` with `result.outcome: "refused"`, exactly like any other unresolvable reference - see ResolumeActionResult.outcome. `params.layer` disambiguates a clip name that occurs more than once; when it does not match any candidate the candidate set narrows to zero, never falling back to the unfiltered set. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` too (never a stale-reference error and never a silent deck change). */
         ResolumeLaunchClipActionRequest: {
             /**
@@ -5926,6 +5928,23 @@ export interface components {
                 layer: string;
                 /** @description The requested master value. Commonly [0, 1] but validated against the layer's own declared range, not assumed. */
                 master: number;
+            };
+        };
+        /** @description `action: "fadeLayer"`: ramps a layer's master fader to targetPercent over durationMs, sent to Arena's OSC input (ADR-064). The call returns once the fade starts. OSC sends no reply, so a sent fade is always `unconfirmable`, never `confirmed`. A newer fade on the same layer replaces a running one. */
+        ResolumeFadeLayerActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "fadeLayer";
+            idempotencyKey: string;
+            params: {
+                /** @description The layer's own label - its authored name, or its generated form if unnamed. */
+                layer: string;
+                /** @description The master level to fade to, in percent. */
+                targetPercent: number;
+                /** @description How long the fade takes. Absent or 0 sets the level at once. */
+                durationMs?: number;
             };
         };
         /** @description The body of a successful (200) response from POST /resolume/actions. */
@@ -6980,7 +6999,7 @@ export interface components {
             broker?: string;
             publish?: components["schemas"]["ConfigShowActionMQTTPublish"];
             expect?: components["schemas"]["ConfigShowActionMQTTExpect"];
-            /** @description resolume-only: one of the seven Track D D-3 action names (launchClip, clearLayer, blackout, launchColumn, selectDeck, setLayerBypass, setLayerMaster). */
+            /** @description resolume-only: one of the Resolume action names (launchClip, clearLayer, blackout, launchColumn, selectDeck, setLayerBypass, setLayerMaster, fadeLayer). */
             action?: string;
             /** @description resolume-only: ADR-037's named-reference vocabulary for this action. Every key is a reference or a value from a closed, per-action list, enforced by this coordinator's write-time validation rather than by this schema. */
             ref?: {
@@ -7986,7 +8005,7 @@ export interface components {
             endOfNightRepeat: boolean;
             backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudio"];
         };
-        /** @description One entry of enterShow.cues or enterResting.cues (RESTING-MODE.md §7). offsetMs is SIGNED and relative to the anchor - negative means before it. action must name an existing show.action object in the same show (server-side; not expressible here). onFailure defaults to "continue" (ADR-035) when absent. */
+        /** @description One entry of enterShow.cues, enterResting.cues or enterEndOfNight.cues (RESTING-MODE.md §7). offsetMs is SIGNED and relative to the anchor - negative means before it. action must name an existing show.action object in the same show (server-side; not expressible here). onFailure defaults to "continue" (ADR-035) when absent. */
         ConfigNightSessionCue: {
             name: string;
             /** @enum {string} */
@@ -8012,6 +8031,20 @@ export interface components {
         ConfigNightSessionEnterResting: {
             cues: components["schemas"]["ConfigNightSessionCue"][];
             blackoutAfterShowMs: number;
+        };
+        /** @description night.session.enterEndOfNight (RESTING-MODE.md §7.2), the cues that run after the final show in place of enterResting. Always present on a read. mode "resting" runs the enterResting cues, and is the value when the block was left out on write. mode "none" runs no cues, so only the end of night playlist starts. mode "custom" runs this block's own cues instead of the enterResting cues. cues is empty unless mode is "custom". blackoutAfterShowMs, when absent, is enterResting's own blackoutAfterShowMs. */
+        ConfigNightSessionEnterEndOfNight: {
+            /** @enum {string} */
+            mode: "resting" | "none" | "custom";
+            cues: components["schemas"]["ConfigNightSessionCue"][];
+            blackoutAfterShowMs?: number;
+        };
+        /** @description The WRITE shape of night.session.enterEndOfNight. Optional: left out, the final show is followed by the enterResting cues exactly as any other show is. mode is required when the block is present. mode "custom" requires at least one cue. mode "resting" and "none" accept only an empty cues list. blackoutAfterShowMs, when absent, uses enterResting's own blackoutAfterShowMs. */
+        ConfigNightSessionEnterEndOfNightWrite: {
+            /** @enum {string} */
+            mode: "resting" | "none" | "custom";
+            cues?: components["schemas"]["ConfigNightSessionCueWrite"][];
+            blackoutAfterShowMs?: number;
         };
         /** @description The WRITE shape of one entry of enterShow.cues/enterResting.cues: the body PUT /config/night.session/{id} accepts inside its cue lists. Identical to ConfigNightSessionCue except that barrier and onFailure are not required - an absent barrier takes its documented default of false, and an absent onFailure takes its documented default of "continue" (ADR-035). The response always stores and returns the resolved ConfigNightSessionCue shape, never this one. */
         ConfigNightSessionCueWrite: {
@@ -8125,7 +8158,7 @@ export interface components {
             /** @enum {string} */
             overridePolicy?: "none" | "authorized-operator";
         };
-        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, and enterResting carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a- documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one - matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteControl/interlocks validation, the same-show rule) applies identically here. */
+        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, enterResting and enterEndOfNight carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a-documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one - matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteControl/interlocks validation, the same-show rule) applies identically here. */
         ConfigNightSessionWrite: {
             show: string;
             label: string;
@@ -8133,6 +8166,7 @@ export interface components {
             resting: components["schemas"]["ConfigNightSessionRestingWrite"];
             enterShow: components["schemas"]["ConfigNightSessionEnterShowWrite"];
             enterResting: components["schemas"]["ConfigNightSessionEnterRestingWrite"];
+            enterEndOfNight?: components["schemas"]["ConfigNightSessionEnterEndOfNightWrite"];
             /**
              * @description Defaults to "duck" when absent. Used by any announcement-role cue that does not name its own announcementPolicy.
              * @enum {string}
@@ -8159,6 +8193,7 @@ export interface components {
             resting: components["schemas"]["ConfigNightSessionResting"];
             enterShow: components["schemas"]["ConfigNightSessionEnterShow"];
             enterResting: components["schemas"]["ConfigNightSessionEnterResting"];
+            enterEndOfNight: components["schemas"]["ConfigNightSessionEnterEndOfNight"];
             /** @enum {string} */
             announcementDefaultPolicy: "duck" | "mix" | "interrupt";
             siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
@@ -8284,10 +8319,10 @@ export interface components {
         NightCue: {
             name: string;
             /**
-             * @description `fadeOut` replays the `enterShow` cue definitions while the session is fading out, under its own outbox identity. Rows in that phase are listed only once they exist.
+             * @description `fadeOut` replays the `enterShow` cue definitions while the session is fading out, under its own outbox identity. Rows in that phase are listed only once they exist. `enterEndOfNight` rows exist only when enterEndOfNight.mode is "custom".
              * @enum {string}
              */
-            phase: "enterShow" | "enterResting" | "fadeOut";
+            phase: "enterShow" | "enterResting" | "enterEndOfNight" | "fadeOut";
             role: string;
             action: string;
             actionRevision: number | null;

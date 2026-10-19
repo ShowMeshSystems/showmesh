@@ -886,6 +886,9 @@ func (h *handlers) nightResetAnnouncementSessionsAtPrepareSite(ctx context.Conte
 	for _, cue := range payload.EnterResting.Cues {
 		skipped += h.nightResetAnnouncementCueSessionOnce(dispatchCtx, now, rec, cue, seen, budgetDeadline)
 	}
+	for _, cue := range nightCustomEndOfNightCues(payload) {
+		skipped += h.nightResetAnnouncementCueSessionOnce(dispatchCtx, now, rec, cue, seen, budgetDeadline)
+	}
 	if skipped > 0 {
 		h.logWarn("night loop: prepare-site: announcement session reset budget exhausted; skipping the rest so prepare-site is never blocked on an unreachable node - each skipped session keeps whatever a previous night session left until a later prepare-site or the night loop's own per-cycle clear reaches it",
 			"sessionId", rec.ID, "skipped", skipped, "budget", nightAnnouncementResetAtPrepareSiteBudget)
@@ -1751,6 +1754,10 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))
 	checks = append(checks, nightCheckBrightnessComposition("enterShow", payload.EnterShow.Cues))
 	checks = append(checks, nightCheckBrightnessComposition("enterResting", payload.EnterResting.Cues))
+	if cues := nightCustomEndOfNightCues(payload); len(cues) > 0 {
+		checks = append(checks, nightCheckBrightnessComposition("enterEndOfNight", cues))
+	}
+	checks = append(checks, nightCheckEndOfNightCues(payload))
 	checks = append(checks, h.nightCheckLightsFades(ctx, payload)...)
 	// Track F seam F6: every configured interlock, disabled ones included,
 	// gets its own check regardless of which phase this preparation epoch
@@ -1776,7 +1783,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	// configured: alignment is a node-level fact.
 	checks = append(checks, h.nightCheckAudioAlignment(ctx, now)...)
 	checks = append(checks, h.nightCheckAudioClock(ctx, now)...)
-	allCues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
+	allCues := append(append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...), nightCustomEndOfNightCues(payload)...)
 	checks = append(checks, h.nightCheckAnnouncementAssets(ctx, allCues, payload))
 	checks = append(checks, h.nightCheckAnnouncementPolicyEnforceable(ctx, allCues, payload))
 
@@ -2226,6 +2233,7 @@ func mapNightAnnouncementPrimaryApplySteps(ctx context.Context, deps Dependencie
 	lists := []phaseCues{
 		{nightPhaseEnterShow, payload.EnterShow.Cues},
 		{nightPhaseEnterResting, payload.EnterResting.Cues},
+		{nightPhaseEnterEndOfNight, nightCustomEndOfNightCues(payload)},
 		// fadeOut replays the enterShow cue definitions under its own
 		// phase, mirroring mapNightCues' own appendDispatchedNightCues.
 		{nightPhaseFadeOut, payload.EnterShow.Cues},
@@ -2285,6 +2293,7 @@ func mapNightCues(ctx context.Context, deps Dependencies, rec store.NightSession
 	out := make([]v1.NightCue, 0, len(payload.EnterShow.Cues)+len(payload.EnterResting.Cues))
 	out = appendMappedNightCues(out, nightPhaseEnterShow, sortedNightCues(payload.EnterShow.Cues), byKey)
 	out = appendMappedNightCues(out, nightPhaseEnterResting, sortedNightCues(payload.EnterResting.Cues), byKey)
+	out = appendMappedNightCues(out, nightPhaseEnterEndOfNight, sortedNightCues(nightCustomEndOfNightCues(payload)), byKey)
 	// The fade-out phase replays the enterShow definitions, so it is only
 	// listed once rows for it exist rather than always showing a second,
 	// permanently not_dispatched copy of that list.
@@ -2562,7 +2571,19 @@ func nightCueActionIDs(payload config.NightSessionPayload) map[string]string {
 	for _, cue := range payload.EnterResting.Cues {
 		out[nightPhaseEnterResting+"\x00"+cue.Name] = cue.Action
 	}
+	for _, cue := range nightCustomEndOfNightCues(payload) {
+		out[nightPhaseEnterEndOfNight+"\x00"+cue.Name] = cue.Action
+	}
 	return out
+}
+
+// nightCustomEndOfNightCues is enterEndOfNight's own cue list: empty
+// unless its mode is custom, because the other modes run no cues of their own.
+func nightCustomEndOfNightCues(payload config.NightSessionPayload) []config.NightSessionCue {
+	if payload.EndOfNightMode() != config.NightSessionEndOfNightModeCustom {
+		return nil
+	}
+	return payload.EnterEndOfNight.Cues
 }
 
 // nightReconcileCueOutbox resolves the current cycle's outbox before any

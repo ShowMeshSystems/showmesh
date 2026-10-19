@@ -223,6 +223,14 @@ The default order is:
 
 The ordering of steps 2–5 is configurable through relative cues, but show completion remains the authoritative anchor.
 
+After the final show, the optional `enterEndOfNight` block chooses which cues run in place of `enterResting`. Its `mode` takes one of three values:
+
+- `resting` runs the `enterResting` cues. This is also what happens when the block is left out, so a night without one behaves exactly as before.
+- `none` runs no cues, so only the end-of-night playlist starts. This suits a site where FPP plays the end of night by itself.
+- `custom` runs the block's own `cues` instead of `enterResting`, for example a different Resolume resting clip or message. It needs at least one cue.
+
+`blackoutAfterShowMs` in the block, when present, replaces `enterResting.blackoutAfterShowMs` for the final show. If the final show is requested while the transition to resting is already running, the end-of-night cues start from that point. Resting cues that already ran are not undone.
+
 ### 7.3 Brightness composition
 
 **Implemented.** [RES-018](../research/RES-018-fpp-brightness-control.md) records the owner-approved two-value FPP component and the FPP 9/10 build plan. Stock FPP and the upstream `fpp-brightness` plugin do not expose this composition. Readiness names each configured fade and does not warn on it: checking a fade on a real display is a rig test, not a readiness condition.
@@ -410,6 +418,15 @@ nightSession:
     lightingFadeIn: 10s
     projectionFadeIn: 10s
     audioFadeIn: 8s
+
+  # Optional. Omitted means the enterResting cues run after the final show too.
+  enterEndOfNight:
+    mode: custom        # resting | none | custom
+    cues:
+      - name: goodnight-wall
+        role: projection
+        action: resolume-goodnight-clip
+        offsetMs: 6000
 
   # Entire block is omitted where ShowMesh does not manage site power/climate.
   siteControl:

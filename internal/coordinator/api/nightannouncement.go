@@ -174,7 +174,7 @@ const (
 // nightAnnouncementKnownCuePhases are the only cuePhase values this
 // package ever suffixes an announcement phase string with, so
 // nightAnnouncementNodeFromPhase can split a trailing nodeID safely.
-var nightAnnouncementKnownCuePhases = []string{nightPhaseEnterShow, nightPhaseEnterResting, nightPhaseFadeOut}
+var nightAnnouncementKnownCuePhases = []string{nightPhaseEnterShow, nightPhaseEnterResting, nightPhaseEnterEndOfNight, nightPhaseFadeOut}
 
 // nightAnnouncementNodeFromPhase recovers the target node id from a
 // phase built as kindPrefix+":"+cuePhase+":"+nodeID.
