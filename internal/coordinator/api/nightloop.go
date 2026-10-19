@@ -1046,6 +1046,7 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 		unmet = nightDegradedShowPlaylistFact
 	}
 	if unmet != "" {
+		h.nightNudgeAtItemEnd(ctx, now, anchor.FPPInstanceID)
 		if now.Sub(rec.StateEnteredAt) >= nightAdvanceLiveDeadline {
 			if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, rec.ID, rec.Cycle, now, store.NightCycleOutcomeInterrupted,
 				"FPP stopped reporting the show before it was confirmed finished."); err != nil && err != store.ErrNightCycleOutcomeNotFound {
@@ -1068,6 +1069,22 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 		cur.BoundaryJSON = ""
 		return cur
 	})
+	h.nightWakeLoop()
+}
+
+// nightNudgeAtItemEnd asks for a fresh FPP poll once the playing sequence's
+// reported time left has run out, so the show's end is seen within seconds
+// instead of at the next scheduled poll.
+func (h *handlers) nightNudgeAtItemEnd(ctx context.Context, now time.Time, instanceID string) {
+	val, _, current, _, _ := resolveConfirmationEvidence(ctx, h.deps.Observations, instanceID, nightSignalPositionRemainingSeconds, time.Time{}, now)
+	if !current {
+		return
+	}
+	at, ok := nightResolveCollectedAt(ctx, h.deps.Observations, instanceID, nightSignalPositionRemainingSeconds, time.Time{}, now)
+	if !ok || now.Before(at.Add(time.Duration(nightAsInt64(val))*time.Second)) {
+		return
+	}
+	h.deps.Nudger.NudgePoll(instanceID)
 }
 
 // nightCycleUnknownOutcomeReason explains why a cycle closes unknown: the
