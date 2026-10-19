@@ -2224,6 +2224,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/show.sitepower": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Shutdown sequences and power-on actions (ADR-065)
+         * @description Requires `config:write`. Never `404`s: with nothing written it answers `revision` `0`, `source` `"default"` and empty lists.
+         */
+        get: operations["getSitePowerConfig"];
+        /**
+         * Set the shutdown sequences and power-on actions
+         * @description Requires `config:write`. A full replacement. Every referenced `show.action` must exist, of any show. A step is an action or a wait (`delayMs`, 1 ms to 24 hours), never both. A step that removes power sets `powerDomain` `presentation` and `domainProvenance` `operator-declared`; any other domain is refused. Sequence ids are lowercase letters, digits and dashes and must be unique. Optionally carries `If-Match`/`If-None-Match`.
+         */
+        put: operations["putSitePowerConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.sitepower/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * show.sitepower revision history, newest first
+         * @description Requires `config:write`. Metadata only.
+         */
+        get: operations["getSitePowerConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/site-power/on": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * System power on, a test command outside a night
+         * @description Requires `show:emergencystop:invoke`. Runs `show.sitepower` `powerOnActions` in order, in the background, and answers `202` straight away. The result is written to the audit log as `show.sitepower.on`. Refused with `409` while a night session is open, while another power run is going, or when no power-on actions are set up. A coordinator restart abandons the rest of the run.
+         */
+        post: operations["sitePowerOn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/site-power/off": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * System power off, a test command outside a night
+         * @description Requires `show:emergencystop:invoke`. Runs every `show.sitepower` shutdown sequence side by side, each step in order with its waits and confirmations, in the background, and answers `202` straight away. The result is written to the audit log as `show.sitepower.off`. Refused with `409` while a night session is open, while another power run is going, or when no sequences are set up. A coordinator restart abandons the rest of the run.
+         */
+        post: operations["sitePowerOff"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/emergency-stop/stop": {
         parameters: {
             query?: never;
@@ -5546,7 +5630,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings" | "preview.gateway" | "preview.camera" | "preview.ndi" | "dashboard.layout";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "show.sitepower" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings" | "preview.gateway" | "preview.camera" | "preview.ndi" | "dashboard.layout";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The "preview.gateway" kind's payload. `tokenSet` reports presence only: the gateway token never appears on any wire type. An empty `url` means previews are off. */
@@ -6157,6 +6241,55 @@ export interface components {
             stop: components["schemas"]["ConfigEmergencyStopLevelPayload"];
             stopPowerDown: components["schemas"]["ConfigEmergencyStopLevelPayload"];
             hardStop: components["schemas"]["ConfigEmergencyStopLevelPayload"];
+        };
+        /** @description One shutdown sequence step (ADR-065). An action step sets `action`; a wait sets only `delayMs`. `powerDomain` and `domainProvenance` mark an action that removes power. */
+        ConfigShutdownStep: {
+            action?: string;
+            requireConfirmation?: boolean;
+            /** @enum {string} */
+            powerDomain?: "presentation";
+            /** @enum {string} */
+            domainProvenance?: "operator-declared";
+            delayMs?: number;
+        };
+        ConfigShutdownSequence: {
+            id: string;
+            label: string;
+            steps: components["schemas"]["ConfigShutdownStep"][];
+        };
+        /** @description The show.sitepower payload. Both lists may be omitted on write and mean empty. */
+        ConfigSitePowerPayload: {
+            shutdownSequences: components["schemas"]["ConfigShutdownSequence"][];
+            powerOnActions: string[];
+        };
+        SitePowerConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            /** Format: int64 */
+            revision: number;
+            payload: components["schemas"]["ConfigSitePowerPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
+        SitePowerRunResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            runId: string;
+            /** @description The power-on action ids, or the shutdown sequence ids, the run started. */
+            started: string[];
+            message: string;
+        };
+        ShutdownStepResult: {
+            step: number;
+            action?: string;
+            delayMs?: number;
+            /** @enum {string} */
+            outcome: "confirmed" | "unconfirmed" | "unconfirmable" | "failed" | "refused" | "skipped";
+            outcomeReason?: string;
         };
         /** @description The body of GET and PUT /config/show.emergencystop. Never `404`s: the payload has a well-defined default (every level empty), reported with `revision` `0` and `source` `"default"` when nothing has ever been written. */
         EmergencyStopConfigResponse: {
@@ -13746,6 +13879,144 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getSitePowerConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SitePowerConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putSitePowerConfig: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigSitePowerPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SitePowerConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getSitePowerConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    sitePowerOn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. The run has started. */
+            202: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SitePowerRunResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    sitePowerOff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. The run has started. */
+            202: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SitePowerRunResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

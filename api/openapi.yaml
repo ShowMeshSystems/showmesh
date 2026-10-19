@@ -6589,6 +6589,160 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/show.sitepower:
+    get:
+      operationId: getSitePowerConfig
+      summary: Shutdown sequences and power-on actions (ADR-065)
+      description: >-
+        Requires `config:write`. Never `404`s: with nothing written it
+        answers `revision` `0`, `source` `"default"` and empty lists.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SitePowerConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putSitePowerConfig
+      summary: Set the shutdown sequences and power-on actions
+      description: >-
+        Requires `config:write`. A full replacement. Every referenced
+        `show.action` must exist, of any show. A step is an action or a
+        wait (`delayMs`, 1 ms to 24 hours), never both. A step that removes
+        power sets `powerDomain` `presentation` and `domainProvenance`
+        `operator-declared`; any other domain is refused. Sequence ids are
+        lowercase letters, digits and dashes and must be unique. Optionally
+        carries `If-Match`/`If-None-Match`.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigSitePowerPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SitePowerConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.sitepower/revisions:
+    get:
+      operationId: getSitePowerConfigRevisions
+      summary: show.sitepower revision history, newest first
+      description: Requires `config:write`. Metadata only.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /site-power/on:
+    post:
+      operationId: sitePowerOn
+      summary: System power on, a test command outside a night
+      description: >-
+        Requires `show:emergencystop:invoke`. Runs `show.sitepower`
+        `powerOnActions` in order, in the background, and answers `202`
+        straight away. The result is written to the audit log as
+        `show.sitepower.on`. Refused with `409` while a night session is
+        open, while another power run is going, or when no power-on
+        actions are set up. A coordinator restart abandons the rest of the
+        run.
+      responses:
+        "202":
+          description: Accepted. The run has started.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SitePowerRunResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /site-power/off:
+    post:
+      operationId: sitePowerOff
+      summary: System power off, a test command outside a night
+      description: >-
+        Requires `show:emergencystop:invoke`. Runs every `show.sitepower`
+        shutdown sequence side by side, each step in order with its waits
+        and confirmations, in the background, and answers `202` straight
+        away. The result is written to the audit log as
+        `show.sitepower.off`. Refused with `409` while a night session is
+        open, while another power run is going, or when no sequences are
+        set up. A coordinator restart abandons the rest of the run.
+      responses:
+        "202":
+          description: Accepted. The run has started.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SitePowerRunResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /emergency-stop/stop:
     post:
       operationId: emergencyStop
@@ -15834,7 +15988,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, media.playlist, node.clock, show.weatherdelay, release.settings, preview.gateway, preview.camera, preview.ndi, dashboard.layout]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, show.sitepower, media.playlist, node.clock, show.weatherdelay, release.settings, preview.gateway, preview.camera, preview.ndi, dashboard.layout]
         revisions:
           type: array
           items:
@@ -17246,6 +17400,117 @@ components:
           $ref: "#/components/schemas/ConfigEmergencyStopLevelPayload"
         hardStop:
           $ref: "#/components/schemas/ConfigEmergencyStopLevelPayload"
+    ConfigShutdownStep:
+      type: object
+      additionalProperties: false
+      description: >-
+        One shutdown sequence step (ADR-065). An action step sets `action`;
+        a wait sets only `delayMs`. `powerDomain` and `domainProvenance`
+        mark an action that removes power.
+      properties:
+        action:
+          type: string
+        requireConfirmation:
+          type: boolean
+        powerDomain:
+          type: string
+          enum: [presentation]
+        domainProvenance:
+          type: string
+          enum: [operator-declared]
+        delayMs:
+          type: integer
+          minimum: 1
+          maximum: 86400000
+    ConfigShutdownSequence:
+      type: object
+      additionalProperties: false
+      required: [id, label, steps]
+      properties:
+        id:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,63}$"
+        label:
+          type: string
+        steps:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/ConfigShutdownStep"
+    ConfigSitePowerPayload:
+      type: object
+      additionalProperties: false
+      description: The show.sitepower payload. Both lists may be omitted on write and mean empty.
+      required: [shutdownSequences, powerOnActions]
+      properties:
+        shutdownSequences:
+          type: array
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/ConfigShutdownSequence"
+        powerOnActions:
+          type: array
+          maxItems: 32
+          items:
+            type: string
+    SitePowerConfigResponse:
+      type: object
+      additionalProperties: false
+      required: [serverTime, kind, revision, payload, updatedAt, createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        payload:
+          $ref: "#/components/schemas/ConfigSitePowerPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+    SitePowerRunResponse:
+      type: object
+      additionalProperties: false
+      required: [serverTime, runId, started, message]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        runId:
+          type: string
+        started:
+          type: array
+          description: The power-on action ids, or the shutdown sequence ids, the run started.
+          items:
+            type: string
+        message:
+          type: string
+    ShutdownStepResult:
+      type: object
+      additionalProperties: false
+      required: [step, outcome]
+      properties:
+        step:
+          type: integer
+        action:
+          type: string
+        delayMs:
+          type: integer
+        outcome:
+          type: string
+          enum: [confirmed, unconfirmed, unconfirmable, failed, refused, skipped]
+        outcomeReason:
+          type: string
     EmergencyStopConfigResponse:
       type: object
       description: >-

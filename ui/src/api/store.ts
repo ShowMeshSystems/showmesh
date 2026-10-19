@@ -339,6 +339,9 @@ type SchemaWeatherDelayDecisionResponse = components['schemas']['WeatherDelayDec
 type SchemaWeatherDelayConfigResponse = components['schemas']['WeatherDelayConfigResponse']
 type SchemaEmergencyStopConfigResponse = components['schemas']['EmergencyStopConfigResponse']
 type SchemaConfigEmergencyStopPayload = components['schemas']['ConfigEmergencyStopPayload']
+type SchemaSitePowerConfigResponse = components['schemas']['SitePowerConfigResponse']
+type SchemaConfigSitePowerPayload = components['schemas']['ConfigSitePowerPayload']
+type SchemaSitePowerRunResponse = components['schemas']['SitePowerRunResponse']
 type SchemaConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
 
 /**
@@ -4193,6 +4196,36 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.putJson<SchemaEmergencyStopConfigResponse>('/config/show.emergencystop', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.sitepower`: shutdown sequences and power-on actions (ADR-065). */
+  async getSitePowerConfig(): Promise<SchemaSitePowerConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaSitePowerConfigResponse>('/config/show.sitepower', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/show.sitepower`: a full replacement. */
+  async putSitePowerConfig(payload: SchemaConfigSitePowerPayload): Promise<SchemaSitePowerConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaSitePowerConfigResponse>('/config/show.sitepower', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/site-power/on` or `/off`: a test run that continues after the 202. */
+  async runSitePower(which: 'on' | 'off'): Promise<SchemaSitePowerRunResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaSitePowerRunResponse>(`/site-power/${which}`, {}, controller.signal, ACTION_INVOKE_REQUEST_TIMEOUT_MS)
     } finally {
       this.endSideCall(controller)
     }

@@ -76,6 +76,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdNight(rest, stdout, stderr, clock)
 	case "emergency-stop":
 		return cmdEmergencyStop(rest, stdout, stderr, clock)
+	case "sitepower":
+		return cmdSitePower(rest, stdout, stderr, clock)
 	case "weather-delay":
 		return cmdWeatherDelay(rest, stdout, stderr, clock)
 	case "resolume":
@@ -327,6 +329,14 @@ Commands:
   emergency-stop config set           write a new show.emergencystop revision from a JSON payload
                                        (write, full replacement, requires config:write)
   emergency-stop config revisions     list show.emergencystop revision history, newest first
+  sitepower get                       show the shutdown sequences and power-on actions
+  sitepower set                       write a new show.sitepower revision from a JSON payload
+                                       (write, full replacement, requires config:write)
+  sitepower revisions                 list show.sitepower revision history, newest first
+  sitepower on                        System power on: run the power-on actions (test command,
+                                       requires show:emergencystop:invoke)
+  sitepower off                       System power off: run every shutdown sequence (test command,
+                                       requires show:emergencystop:invoke)
   weather-delay start                 start a weather delay: nothing starts output until resumed
                                        (write, requires show:weatherdelay:invoke, no confirmation)
   weather-delay cancel-night          cancel the night for weather: the show will not resume

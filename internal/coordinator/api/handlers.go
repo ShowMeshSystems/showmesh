@@ -186,6 +186,11 @@ type handlers struct {
 	// already relies on).
 	emergencyStopArms *emergencyStopArmStore
 
+	// sitePowerBusy refuses a second System power run while one is going.
+	// sitePowerRuns lets tests wait for a run's background work.
+	sitePowerBusy atomic.Bool
+	sitePowerRuns sync.WaitGroup
+
 	// cueActivationFailToBlackWG owns every dispatchAssetMissingFailToBlack
 	// goroutine cueActivationTickOne has launched but not yet finished (see
 	// that method's own doc comment in cueactivationloop.go for why the

@@ -8,6 +8,7 @@ const TABS: readonly { path: string; label: string }[] = [
   { path: 'recovery', label: 'Render recovery' },
   { path: 'weather-delay', label: 'Weather delay' },
   { path: 'emergency-stop', label: 'Emergency stop' },
+  { path: 'site', label: 'Site settings' },
   { path: 'brightness', label: 'Brightness' },
   { path: 'dashboard', label: 'Dashboard' },
   { path: 'appearance', label: 'Appearance' },
