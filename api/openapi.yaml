@@ -22655,6 +22655,13 @@ components:
             Left out means no fade. Needs no cue or action: the
             coordinator writes the transition gain on the resting and
             show FPP instances.
+        fadeOutNightMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long Fade Out Night fades the lights before it
+            stops FPP. Left out means lightsFadeOutMs is used.
         lightsFadeInMs:
           type: integer
           minimum: 1000
@@ -22724,6 +22731,13 @@ components:
             Left out means no fade. Needs no cue or action: the
             coordinator writes the transition gain on the resting and
             show FPP instances.
+        fadeOutNightMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long Fade Out Night fades the lights before it
+            stops FPP. Left out means lightsFadeOutMs is used.
         lightsFadeInMs:
           type: integer
           minimum: 1000

@@ -161,7 +161,7 @@ var nightSessionTopLevelKeys = map[string]bool{
 	"show": true, "label": true, "showPlaylist": true, "resting": true,
 	"enterShow": true, "enterResting": true, "announcementDefaultPolicy": true,
 	"siteControl": true, "interlocks": true,
-	"lightsFadeOutMs": true, "lightsFadeInMs": true,
+	"lightsFadeOutMs": true, "lightsFadeInMs": true, "fadeOutNightMs": true,
 }
 
 var (
@@ -205,6 +205,10 @@ type NightSessionPayload struct {
 	// Nil means no fade in that direction.
 	LightsFadeOutMs *int `json:"lightsFadeOutMs,omitempty"`
 	LightsFadeInMs  *int `json:"lightsFadeInMs,omitempty"`
+
+	// FadeOutNightMs is how long Fade Out Night fades the lights before
+	// stopping FPP. Nil means LightsFadeOutMs.
+	FadeOutNightMs *int `json:"fadeOutNightMs,omitempty"`
 }
 
 // NightSessionFPPPlaylist names an FPP-owned playlist: referenced, never
@@ -654,6 +658,11 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		return NightSessionPayload{}, verr
 	}
 
+	fadeOutNightMs, verr := decodeOptionalLightsFadeMs(top, "fadeOutNightMs")
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+
 	if verr := rejectLightsFadeCueOverlap("lightsFadeOutMs", lightsFadeOutMs, "enterShow", enterShow.Cues); verr != nil {
 		return NightSessionPayload{}, verr
 	}
@@ -669,6 +678,7 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		Interlocks:                interlocks,
 		LightsFadeOutMs:           lightsFadeOutMs,
 		LightsFadeInMs:            lightsFadeInMs,
+		FadeOutNightMs:            fadeOutNightMs,
 	}, nil
 }
 

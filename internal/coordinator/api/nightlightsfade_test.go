@@ -1389,3 +1389,22 @@ func TestLightsFade_FadeOutNightFadesTheLightsBeforeTheStop(t *testing.T) {
 		t.Fatalf("fade-out-night events = %v, want the fade, then the stop, then the gain restored", got)
 	}
 }
+
+func TestLightsFade_FadeOutNightUsesItsOwnDuration(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeOutMs": 20000, "fadeOutNightMs": 5000, `)
+	n.openToFirstShow()
+	n.endShowIntoResting()
+	n.host.setPlaying("halloween-resting", 0)
+	before := len(n.events())
+
+	mustNightCommand(t, n.api, n.token, "fade-out-night")
+	n.tick()
+	if got := joined(n.events()[before:]); got != "gain:player-01:0:5s" {
+		t.Fatalf("fade-out-night must fade over its own 5s, got %v", got)
+	}
+	n.advance(6 * time.Second)
+	n.tick()
+	if eventIndex(n.events()[before:], "stop") < 0 {
+		t.Fatalf("FPP was not stopped once the 5s fade finished: %v", n.events()[before:])
+	}
+}
