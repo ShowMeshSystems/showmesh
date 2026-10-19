@@ -99,6 +99,8 @@ import type {
   WeatherDelayDecisionRequest,
   WeatherDelayDecisionResponse,
   WeatherDelayConfigResponse,
+  EmergencyStopConfigResponse,
+  ConfigEmergencyStopPayload,
   ConfigWeatherDelayPayload,
   SetPrincipalPasswordRequest,
   SetPrincipalRoleRequest,
@@ -618,6 +620,14 @@ export function putWeatherDelayConfig(payload: ConfigWeatherDelayPayload): Promi
 
 export function getWeatherDelayConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getWeatherDelayConfigRevisions()
+}
+
+export function getEmergencyStopConfig(): Promise<EmergencyStopConfigResponse> {
+  return store.getEmergencyStopConfig()
+}
+
+export function putEmergencyStopConfig(payload: ConfigEmergencyStopPayload): Promise<EmergencyStopConfigResponse> {
+  return store.putEmergencyStopConfig(payload)
 }
 
 // Track B seam B2b-front: the three render.* dispatch endpoints. Same
