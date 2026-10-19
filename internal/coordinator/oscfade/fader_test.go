@@ -132,3 +132,22 @@ func TestFaderNewerFadeCancelsOlderAndStartsFromLastSent(t *testing.T) {
 		}
 	}
 }
+
+func TestFaderStartsAFreshFadeFromTheGivenLevel(t *testing.T) {
+	conn := &fakeConn{}
+	f := newTestFader(conn)
+	first := make(chan struct{})
+	if err := f.Fade(0, 1, 0, 0, func() { close(first) }); err != nil {
+		t.Fatal(err)
+	}
+	<-first
+	second := make(chan struct{})
+	if err := f.Fade(0, 0.3, 1, 400*time.Millisecond, func() { close(second) }); err != nil {
+		t.Fatal(err)
+	}
+	<-second
+	vals := conn.values(t)
+	if vals[1] != float32(0.3) {
+		t.Fatalf("second fade started at %v, want the live level 0.3: %v", vals[1], vals)
+	}
+}

@@ -40,7 +40,7 @@ func LayerMasterAddress(layerIndex int) string {
 }
 
 // Fader ramps layer master faders over OSC. A newer fade on a layer
-// cancels the older one; the last value sent is the next fade's start.
+// cancels the older one and continues from the last value it sent.
 type Fader struct {
 	addr  string
 	dial  func(addr string) (net.Conn, error)
@@ -81,8 +81,8 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// Fade starts ramping layerIndex's master from its last sent value (or from,
-// when the layer has never been sent to) to target over d, and returns at
+// Fade starts ramping layerIndex's master from from, or from the last value
+// sent when it replaces a running fade, to target over d, and returns at
 // once. done, when non-nil, is called after the ramp ends or is cancelled.
 func (f *Fader) Fade(layerIndex int, from, target float64, d time.Duration, done func()) error {
 	f.mu.Lock()
@@ -96,9 +96,9 @@ func (f *Fader) Fade(layerIndex int, from, target float64, d time.Duration, done
 	}
 	if cancel, ok := f.cancels[layerIndex]; ok {
 		cancel()
-	}
-	if last, ok := f.lastSent[layerIndex]; ok {
-		from = last
+		if last, ok := f.lastSent[layerIndex]; ok {
+			from = last
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	f.cancels[layerIndex] = cancel

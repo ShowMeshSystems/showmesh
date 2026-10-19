@@ -27,7 +27,6 @@ package coordinator
 import (
 	"context"
 	"errors"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/oscfade"
 	"log/slog"
 	"net/url"
 	"sync"
@@ -39,6 +38,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/oscfade"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 

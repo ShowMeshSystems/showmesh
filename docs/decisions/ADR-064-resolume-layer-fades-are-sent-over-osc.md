@@ -1,6 +1,6 @@
 # ADR-064: Resolume layer fades are sent over OSC
 
-Status: Proposed
+Status: Accepted (owner, 2026-10-19)
 Date: 2026-10-19
 Amends: the "no OSC anywhere" rule recorded in
 [RES-001](../research/RES-001-resolume-smpte-behavior.md) and the
@@ -37,21 +37,27 @@ and as a step in the resting to show transitions, in step with the lights fade.
    name to its `layerIndex` through the stored composition at dispatch time.
 3. OSC goes to the Resolume instance's own host on its configured OSC port,
    7000 by default. The coordinator sends; it never listens.
-4. A sent fade reports `unconfirmable`, never `confirmed`. A newer fade on the
-   same layer replaces a running one, starting from the last value sent.
+4. A sent fade reports `unconfirmable`, never `confirmed`. A fade starts from
+   the layer's live master, read once over REST before the first message. A
+   newer fade on the same layer replaces a running one, starting from the last
+   value sent.
 5. In a transition step, the fade time is the step's own fade time, else the
    lights fade for that direction (`lightsFadeOutMs` entering a show or fading
    out the night, `lightsFadeInMs` entering resting), else the action's own.
 6. The OSC sender lives in its own package. The Resolume REST collector keeps
    its guards against OSC and UDP.
+7. A fade passes the same composition check as every REST layer action, and
+   is refused when the uploaded composition is not confirmed against Arena.
 
 ## Consequences
 
 - A layer fade never touches Arena's web server.
 - The fade's result is not observed by ShowMesh. The collector's normal layer
   readings still show the master level when it next surveys.
-- A layer reordered in Arena without re-uploading the composition gets the
-  fade on the wrong layer, the same exposure the composition file already has.
+- A fade adds one REST read per fade, never one per message.
+- A layer reordered in Arena without re-uploading the composition is caught by
+  the composition check, as it is for REST actions. A reorder after the last
+  check and before the fade still reaches the wrong layer.
 
 ## Alternatives
 

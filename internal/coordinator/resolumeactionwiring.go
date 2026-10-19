@@ -41,12 +41,12 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/oscfade"
 	"strings"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/oscfade"
 )
 
 // resolumeActionCoordinatorRequiredLabel mirrors
@@ -241,7 +241,7 @@ func (a *resolumeActionDispatcherAdapter) Dispatch(ctx context.Context, action s
 	}
 
 	if name == resolume.ActionFadeLayer {
-		return a.dispatchFadeLayer(params, tc), nil
+		return a.dispatchFadeLayer(ctx, params, tc), nil
 	}
 
 	actionParams, refusalReason, err := buildResolumeActionParams(name, params, tc)
@@ -552,7 +552,7 @@ func optionalStringParam(params map[string]any, key string) string {
 
 // dispatchFadeLayer sends a layer fade over OSC (ADR-064). It never touches
 // Arena's REST API, and OSC sends no reply, so a sent fade is unconfirmable.
-func (a *resolumeActionDispatcherAdapter) dispatchFadeLayer(params map[string]any, tc *resolume.TrackedComposition) api.ResolumeActionResult {
+func (a *resolumeActionDispatcherAdapter) dispatchFadeLayer(ctx context.Context, params map[string]any, tc *resolume.TrackedComposition) api.ResolumeActionResult {
 	refused := func(reason string) api.ResolumeActionResult {
 		return api.ResolumeActionResult{Outcome: api.ResolumeOutcomeRefused, Reason: reason}
 	}
@@ -578,9 +578,13 @@ func (a *resolumeActionDispatcherAdapter) dispatchFadeLayer(params map[string]an
 	}
 	duration := time.Duration(durationMs) * time.Millisecond
 
+	start, reason := a.dispatcher.FadeLayerStart(ctx, id)
+	if reason != "" {
+		return refused(reason)
+	}
 	dispatchedAt := a.now()
 	resolvedAt := dispatchedAt
-	if err := a.osc.Fade(layer.Index, 1, target/100, duration, nil); err != nil {
+	if err := a.osc.Fade(layer.Index, start, target/100, duration, nil); err != nil {
 		return api.ResolumeActionResult{Outcome: api.ResolumeOutcomeFailed, ResolvedAt: &resolvedAt, ResolvedID: id.String(),
 			Reason: "The fade could not be sent to Resolume. Check the OSC port and that Arena's OSC input is on."}
 	}

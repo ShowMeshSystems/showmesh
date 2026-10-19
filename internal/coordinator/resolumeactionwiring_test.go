@@ -7,6 +7,7 @@ package coordinator
 // is where the wired-path proof lives.
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -381,7 +382,7 @@ func TestBuildResolumeActionParamsBlackoutTakesNoID(t *testing.T) {
 // back to Arena's REST API when no OSC sender exists.
 func TestAdapterFadeLayerRefusesWithoutAnOSCAddress(t *testing.T) {
 	adapter := newResolumeActionDispatcherAdapter(nil, nil)
-	res := adapter.dispatchFadeLayer(map[string]any{"layer": "Video", "targetPercent": float64(0)}, nil)
+	res := adapter.dispatchFadeLayer(context.Background(), map[string]any{"layer": "Video", "targetPercent": float64(0)}, nil)
 	if res.Outcome != api.ResolumeOutcomeRefused || res.Dispatched {
 		t.Fatalf("result = %+v, want refused and not dispatched", res)
 	}
