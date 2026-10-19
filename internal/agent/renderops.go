@@ -202,7 +202,7 @@ func rejectUnknownKeys(action string, params map[string]any, known map[string]bo
 // command.
 func isRenderAction(action string) bool {
 	switch action {
-	case "render.surface.apply", "render.surface.clear", "render.surface.blackout", "render.pipeline.restart", "render.transport.probe":
+	case "render.surface.apply", "render.surface.clear", "render.surface.blackout", "render.surface.fade", "render.pipeline.restart", "render.transport.probe":
 		return true
 	default:
 		return false
@@ -271,6 +271,10 @@ type renderOperations struct {
 	// here always wins over holdBlackDefaultAll, explicit true or explicit
 	// false alike.
 	holdBlack map[string]bool
+
+	// fades holds each surface's current render.surface.fade, guarded by mu.
+	// Memory only: a restarted node draws at full level.
+	fades map[string]pipeline.Fade
 
 	// holdBlackDefaultAll is true only when holdBlackStore.Load failed at
 	// construction (an unreadable or corrupt file): every surface with no
@@ -470,6 +474,17 @@ func (o *renderOperations) clearHeldBlack(surfaceID string) error {
 type surfaceHoldBlackSource struct {
 	o         *renderOperations
 	surfaceID string
+}
+
+// Level implements [pipeline.LevelSource] from the surface's current fade.
+func (s surfaceHoldBlackSource) Level(now time.Time) float64 {
+	s.o.mu.Lock()
+	f, ok := s.o.fades[s.surfaceID]
+	s.o.mu.Unlock()
+	if !ok {
+		return 1
+	}
+	return f.Level(now)
 }
 
 func (s surfaceHoldBlackSource) HoldBlack() bool {
@@ -1199,6 +1214,111 @@ func (o *renderOperations) blackoutSurface(ctx context.Context, params map[strin
 		ExecutedAt: executedAt,
 		ObservedAt: observedAt,
 	}, nil
+}
+
+// renderFadeDimHold is how long a surface stays below full level after its
+// fade ends with no newer fade. The coordinator always sends full level next,
+// so a projection never stays dark when the coordinator or broker is lost.
+const renderFadeDimHold = 2 * time.Minute
+
+// renderSurfaceFadeKnownKeys is the key allowlist for render.surface.fade.
+var renderSurfaceFadeKnownKeys = map[string]bool{"surfaceId": true, "targetPercent": true, "startsAt": true, "endsAt": true, "durationMs": true}
+
+// fadeSurface is the OperationFunc for "render.surface.fade": ramp the
+// surface's output level from where it is now to targetPercent, ending at
+// endsAt or durationMs from now. Blackout still wins while it is held.
+func (o *renderOperations) fadeSurface(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
+	const action = "render.surface.fade"
+
+	surfaceID, err := parseSurfaceID(action, params)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := rejectUnknownKeys(action, params, renderSurfaceFadeKnownKeys); err != nil {
+		return OperationResult{}, err
+	}
+	fade, err := parseRenderFade(action, params, now())
+	if err != nil {
+		return OperationResult{}, err
+	}
+
+	executedAt := now()
+	o.mu.Lock()
+	if o.fades == nil {
+		o.fades = map[string]pipeline.Fade{}
+	}
+	if cur, ok := o.fades[surfaceID]; ok {
+		fade.From = cur.Level(executedAt)
+	} else {
+		fade.From = 1
+	}
+	if fade.To < 1 {
+		fade.Restore = fade.End.Add(renderFadeDimHold)
+	}
+	o.fades[surfaceID] = fade
+	o.mu.Unlock()
+
+	return OperationResult{
+		Confirmed: true,
+		Signal:    "node.render.surface_state",
+		Value: map[string]any{
+			"surfaceId":     surfaceID,
+			"targetPercent": int(fade.To*100 + 0.5),
+			"endsAt":        fade.End.UTC().Format(time.RFC3339Nano),
+		},
+		ExecutedAt: executedAt,
+		ObservedAt: now(),
+	}, nil
+}
+
+// parseRenderFade reads targetPercent and the fade's timing. startsAt is
+// optional and never earlier than now; the end is endsAt, or durationMs
+// after the start, or the start itself for an instant change.
+func parseRenderFade(action string, params map[string]any, now time.Time) (pipeline.Fade, error) {
+	pct, ok := params["targetPercent"].(float64)
+	if !ok || pct < 0 || pct > 100 {
+		return pipeline.Fade{}, fmt.Errorf("%s: params.targetPercent must be a number from 0 to 100", action)
+	}
+	parseTime := func(key string) (time.Time, bool, error) {
+		raw, present := params[key]
+		if !present {
+			return time.Time{}, false, nil
+		}
+		str, ok := raw.(string)
+		if !ok {
+			return time.Time{}, false, fmt.Errorf("%s: params.%s must be an RFC 3339 time", action, key)
+		}
+		t, err := time.Parse(time.RFC3339Nano, str)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("%s: params.%s must be an RFC 3339 time: %w", action, key, err)
+		}
+		return t, true, nil
+	}
+	start, hasStart, err := parseTime("startsAt")
+	if err != nil {
+		return pipeline.Fade{}, err
+	}
+	if !hasStart || start.Before(now) {
+		start = now
+	}
+	end, hasEnd, err := parseTime("endsAt")
+	if err != nil {
+		return pipeline.Fade{}, err
+	}
+	if raw, present := params["durationMs"]; present {
+		ms, ok := raw.(float64)
+		if !ok || ms < 0 {
+			return pipeline.Fade{}, fmt.Errorf("%s: params.durationMs must be a whole number of milliseconds, 0 or more", action)
+		}
+		if hasEnd {
+			return pipeline.Fade{}, fmt.Errorf("%s: params.endsAt and params.durationMs cannot both be set", action)
+		}
+		end, hasEnd = start.Add(time.Duration(ms)*time.Millisecond), true
+	}
+	if !hasEnd || end.Before(start) {
+		end = start
+	}
+	return pipeline.Fade{To: pct / 100, Start: start, End: end}, nil
 }
 
 // restartPipeline is the OperationFunc for "render.pipeline.restart":

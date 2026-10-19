@@ -193,6 +193,10 @@ type FrameWriter struct {
 	// this tick is decided; see [HoldBlackSource]. nil never holds black.
 	holdBlack HoldBlackSource
 
+	// fadeBuf holds a faded copy of the tick's output, so a fade never
+	// rewrites buf, which a hold idle output draws again next tick.
+	fadeBuf []byte
+
 	// buf, idleBuf, and diagBuf are all reused every frame (never
 	// (re)allocated on the hot path) — see build contract's "avoid an
 	// allocation per frame" rule. idleBuf is all-zero and never written to
@@ -686,6 +690,18 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 			positionMS = &pos
 			duration := int64(fw.source.FrameCount()) * fw.stepTime.Milliseconds()
 			durationMS = &duration
+		}
+	}
+
+	if drawing != DrawingBlackout {
+		if ls, ok := fw.holdBlack.(LevelSource); ok {
+			if level := ls.Level(tickTime); level < 1 {
+				if len(fw.fadeBuf) != len(outBuf) {
+					fw.fadeBuf = make([]byte, len(outBuf))
+				}
+				ScaleBytes(fw.fadeBuf, outBuf, level)
+				outBuf = fw.fadeBuf
+			}
 		}
 	}
 

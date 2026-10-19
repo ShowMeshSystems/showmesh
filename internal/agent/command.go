@@ -263,6 +263,7 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 		ops["render.surface.apply"] = render.applySurface
 		ops["render.surface.clear"] = render.clearSurface
 		ops["render.surface.blackout"] = render.blackoutSurface
+		ops["render.surface.fade"] = render.fadeSurface
 		ops["render.pipeline.restart"] = render.restartPipeline
 		ops["render.transport.probe"] = render.probeTransport
 	}

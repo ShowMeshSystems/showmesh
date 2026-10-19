@@ -22670,6 +22670,24 @@ components:
             Optional. How long the lights take to fade in, starting when
             the resting playlist starts after a show. Left out means no
             fade.
+        renderFadeOutMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long rendered projections take to fade out,
+            finishing as each show starts. Left out means the lights
+            fade-out time. Set alone, projections fade and the lights do
+            not.
+        renderFadeInMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long rendered projections take to fade in,
+            starting when the resting playlist starts after a show. Left
+            out means the lights fade-in time. Set alone, projections fade
+            and the lights do not.
     ConfigNightSession:
       type: object
       description: >-
@@ -22746,6 +22764,24 @@ components:
             Optional. How long the lights take to fade in, starting when
             the resting playlist starts after a show. Left out means no
             fade.
+        renderFadeOutMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long rendered projections take to fade out,
+            finishing as each show starts. Left out means the lights
+            fade-out time. Set alone, projections fade and the lights do
+            not.
+        renderFadeInMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long rendered projections take to fade in,
+            starting when the resting playlist starts after a show. Left
+            out means the lights fade-in time. Set alone, projections fade
+            and the lights do not.
     NightSessionConfigResponse:
       type: object
       description: >-

@@ -85,6 +85,16 @@ func printNightSessionLightsFades(w io.Writer, p nightSession) {
 		}
 		_, _ = fmt.Fprintf(w, "  %s: %dms\n", f.label, *f.ms)
 	}
+	for _, f := range []struct {
+		label string
+		ms    *int
+	}{{"Projection fade-out", p.RenderFadeOutMs}, {"Projection fade-in", p.RenderFadeInMs}} {
+		if f.ms == nil {
+			_, _ = fmt.Fprintf(w, "  %s: same as the lights\n", f.label)
+			continue
+		}
+		_, _ = fmt.Fprintf(w, "  %s: %dms\n", f.label, *f.ms)
+	}
 }
 
 // printNightSessionSiteControl renders night.session.siteControl
