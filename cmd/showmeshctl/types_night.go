@@ -210,6 +210,8 @@ type nightSession struct {
 	Interlocks                []nightSessionInterlock  `json:"interlocks,omitempty"`
 	LightsFadeOutMs           *int                     `json:"lightsFadeOutMs,omitempty"`
 	LightsFadeInMs            *int                     `json:"lightsFadeInMs,omitempty"`
+	RenderFadeOutMs           *int                     `json:"renderFadeOutMs,omitempty"`
+	RenderFadeInMs            *int                     `json:"renderFadeInMs,omitempty"`
 }
 
 // nightSessionConfigResponse is the body of GET and PUT

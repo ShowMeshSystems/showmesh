@@ -162,6 +162,7 @@ var nightSessionTopLevelKeys = map[string]bool{
 	"enterShow": true, "enterResting": true, "announcementDefaultPolicy": true,
 	"siteControl": true, "interlocks": true,
 	"lightsFadeOutMs": true, "lightsFadeInMs": true,
+	"renderFadeOutMs": true, "renderFadeInMs": true,
 }
 
 var (
@@ -205,6 +206,11 @@ type NightSessionPayload struct {
 	// Nil means no fade in that direction.
 	LightsFadeOutMs *int `json:"lightsFadeOutMs,omitempty"`
 	LightsFadeInMs  *int `json:"lightsFadeInMs,omitempty"`
+
+	// RenderFadeOutMs/RenderFadeInMs override the lights times for rendered
+	// projections. Projections fade only when the lights fade that way.
+	RenderFadeOutMs *int `json:"renderFadeOutMs,omitempty"`
+	RenderFadeInMs  *int `json:"renderFadeInMs,omitempty"`
 }
 
 // NightSessionFPPPlaylist names an FPP-owned playlist: referenced, never
@@ -654,6 +660,15 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		return NightSessionPayload{}, verr
 	}
 
+	renderFadeOutMs, verr := decodeOptionalLightsFadeMs(top, "renderFadeOutMs")
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+	renderFadeInMs, verr := decodeOptionalLightsFadeMs(top, "renderFadeInMs")
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+
 	if verr := rejectLightsFadeCueOverlap("lightsFadeOutMs", lightsFadeOutMs, "enterShow", enterShow.Cues); verr != nil {
 		return NightSessionPayload{}, verr
 	}
@@ -669,6 +684,8 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		Interlocks:                interlocks,
 		LightsFadeOutMs:           lightsFadeOutMs,
 		LightsFadeInMs:            lightsFadeInMs,
+		RenderFadeOutMs:           renderFadeOutMs,
+		RenderFadeInMs:            renderFadeInMs,
 	}, nil
 }
 

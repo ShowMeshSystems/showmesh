@@ -22663,6 +22663,22 @@ components:
             Optional. How long the lights take to fade in, starting when
             the resting playlist starts after a show. Left out means no
             fade.
+        renderFadeOutMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long rendered projections take to fade out
+            before a show or when the night fades out. Left out means the
+            lights fade-out time. Projections fade only when the lights do.
+        renderFadeInMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long rendered projections take to fade in after
+            a show. Left out means the lights fade-in time. Projections
+            fade only when the lights do.
     ConfigNightSession:
       type: object
       description: >-
@@ -22732,6 +22748,22 @@ components:
             Optional. How long the lights take to fade in, starting when
             the resting playlist starts after a show. Left out means no
             fade.
+        renderFadeOutMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long rendered projections take to fade out
+            before a show or when the night fades out. Left out means the
+            lights fade-out time. Projections fade only when the lights do.
+        renderFadeInMs:
+          type: integer
+          minimum: 1000
+          maximum: 86400000
+          description: >-
+            Optional. How long rendered projections take to fade in after
+            a show. Left out means the lights fade-in time. Projections
+            fade only when the lights do.
     NightSessionConfigResponse:
       type: object
       description: >-

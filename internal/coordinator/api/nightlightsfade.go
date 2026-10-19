@@ -238,6 +238,7 @@ func (h *handlers) nightLightsStart(ctx context.Context, now time.Time, rec stor
 	sess.steps[st.key] = &st
 	l.mu.Unlock()
 	h.nightLightsLaunchDue(ctx, now, &st)
+	h.nightRenderFadeStart(ctx, now, rec, payload, st)
 }
 
 // nightLightsAdvance runs on every tick for the current session, whatever its

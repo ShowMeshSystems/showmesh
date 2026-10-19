@@ -46,6 +46,7 @@ type lightsNight struct {
 	delay         func(f nightLightingFade) time.Duration
 	reportedGain  *int64
 	fadeActive    bool
+	renderPub     *fakeRenderPublisher
 }
 
 func (n *lightsNight) record(s string) {
@@ -246,6 +247,8 @@ func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *
 	deps.FPP = &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: srv.URL}}}
 	backend := nightTestAssetBackend(t)
 	deps.AssetBackend = backend
+	n.renderPub = &fakeRenderPublisher{}
+	deps.RenderPublisher = n.renderPub
 	deps = deps.withDefaults()
 
 	api := New(deps, Options{Clock: clock, Logger: testLogger(), NightReadinessMaxAge: time.Hour})
@@ -1387,5 +1390,43 @@ func TestLightsFade_FadeOutNightFadesTheLightsBeforeTheStop(t *testing.T) {
 	n.tick()
 	if got := joined(n.events()[before:]); got != "gain:player-01:0:20s,stop,gain:player-01:100:0s" {
 		t.Fatalf("fade-out-night events = %v, want the fade, then the stop, then the gain restored", got)
+	}
+}
+
+func TestLightsFade_ProjectionsFadeOutWithTheLightsAndEndAtTheSameMoment(t *testing.T) {
+	oldDeadline, oldPoll := renderCommandConfirmDeadline, renderCommandPollInterval
+	renderCommandConfirmDeadline, renderCommandPollInterval = 50*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { renderCommandConfirmDeadline, renderCommandPollInterval = oldDeadline, oldPoll })
+
+	n := newLightsNight(t, `"lightsFadeOutMs": 20000, "renderFadeOutMs": 10000, `)
+	renderPutSurface(t, n.st, "front", "halloween-2026", "render-01")
+	n.openToFirstShow()
+	n.endShowIntoResting()
+	end := n.restingEnd()
+	n.h.nightRenderFadeWG.Wait()
+	n.renderPub.mu.Lock()
+	n.renderPub.payload = nil
+	n.renderPub.mu.Unlock()
+
+	n.advance(end.Add(-20 * time.Second).Sub(n.now))
+	n.host.setPlaying("halloween-resting", 0)
+	n.tick()
+	n.tick()
+	n.h.nightRenderFadeWG.Wait()
+
+	n.renderPub.mu.Lock()
+	defer n.renderPub.mu.Unlock()
+	if len(n.renderPub.payload) != 1 {
+		t.Fatalf("projection fades sent at the lights fade-out = %d, want 1: %+v", len(n.renderPub.payload), n.renderPub.payload)
+	}
+	p := n.renderPub.payload[0].Payload
+	if p.Action != "render.surface.fade" || p.Params["surfaceId"] != "front" || p.Params["targetPercent"] != float64(0) {
+		t.Fatalf("projection fade = %s %v, want render.surface.fade of front to 0", p.Action, p.Params)
+	}
+	if got, want := p.Params["endsAt"], end.UTC().Format(time.RFC3339Nano); got != want {
+		t.Fatalf("projection fade ends at %v, want the lights end %v", got, want)
+	}
+	if got, want := p.Params["startsAt"], end.Add(-10*time.Second).UTC().Format(time.RFC3339Nano); got != want {
+		t.Fatalf("projection fade starts at %v, want %v from renderFadeOutMs", got, want)
 	}
 }
