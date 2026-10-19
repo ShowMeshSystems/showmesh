@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -1142,5 +1143,103 @@ func TestCueActivationTickOneFollowStopDispatchesExactlyOnceAcrossManyTicks(t *t
 	}
 	if stops != 1 {
 		t.Fatalf("audio.session.stop dispatched %d time(s) across 5 ticks of an unchanged FollowStop, want exactly 1", stops)
+	}
+}
+
+// TestCueActivationTickOneFollowStopYieldsToANewerActivation proves a
+// follow-stop never blacks or silences a node once a newer cue.activate
+// reached it mid-stop, such as the night controller's resting render.
+func TestCueActivationTickOneFollowStopYieldsToANewerActivation(t *testing.T) {
+	oldDeadline, oldPoll := renderCommandConfirmDeadline, renderCommandPollInterval
+	renderCommandConfirmDeadline = 300 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { renderCommandConfirmDeadline, renderCommandPollInterval = oldDeadline, oldPoll })
+
+	now := testNow
+	var clockMu sync.Mutex
+	storeNow := now
+	storeClock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return storeNow }
+	setup := newFailToBlackComposedSetup(t, storeClock)
+	const showID, cueID, playlistID, instanceUUID, entryID, nodeID = "halloween-2026", "neverender", "playlist-1", "inst-1", "entry-1", "render-01"
+
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	putShowModeForTest(t, setup.st, config.ShowModeShow)
+	putAudioNodeForTest(t, setup.st, nodeID)
+	renderPutSurface(t, setup.st, "surface-a", showID, nodeID)
+	renderPutSurface(t, setup.st, "surface-b", showID, nodeID)
+	declareNodeForTest(t, setup.st, nodeID)
+	putFreshReportForTest(t, setup.st, nodeID, now)
+
+	cuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: showID, Name: cueID,
+		Outputs: config.ShowCueOutputs{
+			Audio:  &config.ShowCueAudioOutput{Asset: "asset-" + cueID, Targets: []string{nodeID}},
+			Render: &config.ShowCueRenderOutput{Sequence: "seq-" + cueID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowCueConfigKind, cueID, cuePayload)
+	putPlaylistForTest(t, setup.st, playlistID, config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: instanceUUID, PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: entryID, Cue: cueID,
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	})
+	putActiveShowForTest(t, setup.st, showID)
+
+	held := &cueHeldTracker{}
+	held.observe(instanceUUID, cueactivate.Decision{
+		State: cueactivate.StateActivated,
+		Activations: map[string]cueactivation.Activation{
+			nodeID: {Runner: "fpp", RunnerInstance: instanceUUID, ActivationID: "cueact-old-1", Show: showID, Generation: 1, CueID: cueID, CueRevision: 1},
+		},
+	})
+	if err := setup.st.PutFPPPlaylistEntryObservation(context.Background(), store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: instanceUUID, SchemaVersion: 1, Sequence: 2, Action: "playing",
+		PlaylistName: "resting-halloween", PlaylistHash: hash64ForTest("b2"),
+		Section: "mainPlaylist", Position: 0, EntryKey: "unrelated-entry-key",
+		EntryOccurrenceSequence: 2, ObservedAt: now, ReceivedAt: now,
+	}); err != nil {
+		t.Fatalf("put fpp playlist entry observation: %v", err)
+	}
+
+	var once sync.Once
+	setup.renderPub.onPublish = func() {
+		once.Do(func() {
+			clockMu.Lock()
+			storeNow = now.Add(5 * time.Second)
+			clockMu.Unlock()
+			if _, err := setup.st.InsertCommand(context.Background(), store.CommandRecord{
+				ID: "resting-activate", IdempotencyKey: "resting-activate", Action: "cue.activate",
+				TargetKind: "node", TargetID: nodeID, ParamsJSON: "{}",
+				IssuerPrincipalID: "night-controller", ConfirmationMethod: "evidence", State: "pending",
+			}); err != nil {
+				t.Errorf("insert resting cue.activate: %v", err)
+			}
+		})
+	}
+
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	obs, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), instanceUUID)
+	if err != nil {
+		t.Fatalf("get fpp playlist entry observation: %v", err)
+	}
+	h.cueActivationTickOne(context.Background(), now, obs, nil, held)
+	h.cueActivationFailToBlackWG.Wait()
+
+	if got := setup.renderPub.count(); got != 1 {
+		t.Fatalf("render.surface.blackout was dispatched %d time(s), want 1: the second surface belongs to the newer cue", got)
+	}
+	setup.audioPub.mu.Lock()
+	defer setup.audioPub.mu.Unlock()
+	for _, d := range setup.audioPub.dispatched {
+		if d.Action == "audio.session.stop" {
+			t.Fatalf("audio.session.stop was dispatched after a newer cue.activate reached the node")
+		}
 	}
 }
