@@ -101,25 +101,65 @@ upgrade_copy_settings() {
   cp -a "$COORD_ENV" "$1/coordinator.env" && cp -a "$COORDINATOR_DIR/mosquitto" "$1/mosquitto"
 }
 
-# upgrade_backup copies the database, settings and broker files; the coordinator is down only for the copy.
+# upgrade_previous_data prints the newest existing backup's data folder, or nothing.
+upgrade_previous_data() {
+  local prev
+  prev="$(ls -1 "$BACKUP_ROOT" 2>/dev/null | sort | tail -n 1)"
+  [ -n "$prev" ] && [ -d "$BACKUP_ROOT/$prev/data" ] && printf '%s\n' "$BACKUP_ROOT/$prev/data"
+  return 0
+}
+
+# upgrade_data_source CID DATA_DIR prints the host folder mounted at DATA_DIR when rsync can read it, or nothing.
+upgrade_data_source() {
+  local src
+  command -v rsync >/dev/null 2>&1 || return 0
+  src="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "'"$2"'"}}{{.Source}}{{end}}{{end}}' "$1" 2>/dev/null)"
+  [ -n "$src" ] && [ -d "$src" ] && printf '%s\n' "$src"
+  return 0
+}
+
+# upgrade_sync_data SRC DEST PREV copies SRC into DEST, hardlinking each file unchanged since PREV.
+# Asset files are named by their hash and never rewritten, so a link shares identical bytes.
+upgrade_sync_data() {
+  local link=()
+  [ -z "$3" ] || link=(--link-dest="$3")
+  rsync -a --delete "${link[@]}" "$1/" "$2/"
+}
+
+# upgrade_copy_data CID DATA_DIR SRC DEST PREV copies the stopped coordinator's data, with docker cp when SRC is empty.
+upgrade_copy_data() {
+  if [ -n "$3" ]; then
+    upgrade_sync_data "$3" "$4" "$5"
+  else
+    docker cp -a "$1:$2/." "$4"
+  fi
+}
+
+# upgrade_backup copies the database, settings and broker files; the coordinator is down only for the database copy.
 upgrade_backup() {
   step "Backing up the coordinator before upgrading it"
-  local old stamp dir cid volume data_dir log files="-f docker-compose.yml -f docker-compose.published.yml"
+  local old stamp dir cid volume data_dir src prev log files="-f docker-compose.yml -f docker-compose.published.yml"
   log="$(run_tmp)"
   old="$(env_get "$COORD_ENV" SHOWMESH_RELEASE_VERSION)"
   data_dir="$(env_get "$COORD_ENV" SHOWMESH_DATA_DIR)"
   data_dir="${data_dir:-/var/lib/showmesh}"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   dir="$BACKUP_ROOT/$stamp-${old:-unknown}"
+  prev="$(upgrade_previous_data)"
   install -d -m 0700 "$BACKUP_ROOT"
   install -d -m 0700 "$dir"
   cid="$(compose ps -a -q coordinator 2>/dev/null | head -n 1)"
+  src="$(upgrade_data_source "$cid" "$data_dir")"
+  if [ -n "$src" ] && ! run_step "copying the coordinator's media files" "$log" upgrade_sync_data "$src" "$dir/data" "$prev"; then
+    rm -rf "$dir"
+    fail_with "$log" "The coordinator's media files could not be copied, so nothing was upgraded." "check free space on $BACKUP_ROOT, then run the install command again"
+  fi
   if ! run_step "stopping the coordinator to copy its database" "$log" compose stop coordinator; then
     rm -rf "$dir"
     run_step "starting the coordinator again" "$(run_tmp)" compose start coordinator || true
     fail_with "$log" "The coordinator could not be stopped to copy its database, so nothing was upgraded." "cd $COORDINATOR_DIR && docker compose $files stop coordinator"
   fi
-  if ! run_step "copying the coordinator's database" "$log" docker cp -a "$cid:$data_dir/." "$dir/data"; then
+  if ! run_step "copying the coordinator's database" "$log" upgrade_copy_data "$cid" "$data_dir" "$src" "$dir/data" "$prev"; then
     rm -rf "$dir"
     run_step "starting the coordinator again" "$(run_tmp)" compose start coordinator || true
     fail_with "$log" "The coordinator's database could not be copied, so nothing was upgraded." "docker cp $cid:$data_dir/. <backup directory>, then run the install command again"

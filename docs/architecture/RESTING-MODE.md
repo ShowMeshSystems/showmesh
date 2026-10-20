@@ -53,7 +53,7 @@ All commands are asynchronous, idempotent by invocation identity where available
 
 ### 4.1 `prepare-site`
 
-Opens a new persisted preparation epoch and enters `preparing` when the prior session is `inactive` or `stopped`, then runs any configured show-day preparation actions. A deployment may use it for presentation power or a Home Assistant thermal mode; a deployment with neither still opens a valid epoch. ShowMesh does not directly cycle a heater, exhaust fan, or thermostat.
+Opens a new persisted preparation epoch and enters `preparing` when the prior session is `inactive` or `stopped`, then runs the night's prepare-site actions once for that preparation ([ADR-065](../decisions/ADR-065-site-actions-and-shutdown-sequences.md)). A deployment may use it for presentation power or a Home Assistant thermal mode; a deployment with neither still opens a valid epoch. ShowMesh does not directly cycle a heater, exhaust fan, or thermostat.
 
 Every later preparation command attaches to this epoch. A duplicate within the same preparation or active session is an idempotent no-op. It is rejected during finalization or fade-out. The epoch becomes eligible for readiness and pre-show after every configured blocking preparation requirement has fresh post-epoch evidence. With no blocking preparation requirements, it is eligible immediately. A delayed command from the prior operating day cannot satisfy a new epoch using old evidence.
 
@@ -106,7 +106,7 @@ Fades the active non-live presentation to stopped. Receipt closes admission imme
 
 ### 4.7 `power-down-presentation`
 
-Closes the session after ShowMesh has observed that playback stopped and the fade completed. Receipt also closes admission and implies `fade-out-night` if it has not occurred. If presentation-power actions are configured, it performs their configured shutdown, confirmation, and cooldown steps. With no power actions, it records `not_configured` for that optional phase and reaches `stopped` without error. Any configured power action must remain scoped away from environmental protection.
+Closes the session after ShowMesh has observed that playback stopped and the fade completed. Receipt also closes admission and implies `fade-out-night` if it has not occurred. If shutdown sequences are configured, it runs them with their confirmation and cooldown steps ([ADR-065](../decisions/ADR-065-site-actions-and-shutdown-sequences.md)). With no power actions, it records `not_configured` for that optional phase and reaches `stopped` without error. Any configured power action must remain scoped away from environmental protection.
 
 ### 4.8 `end-session` (operator recovery, not an FPP-invoked intent)
 
@@ -301,45 +301,21 @@ environmental:
   exhaust and circulation fans
 ```
 
-Every configured power binding declares:
+Power is removed only by a shutdown sequence step that declares `powerDomain: presentation` and its `domainProvenance` (`provider` or `operator-declared`). `environmental`, `mixed` and `unknown` steps are refused rather than guessed. A provider may supply domain provenance only when it can authoritatively identify every target. Generic MQTT and Home Assistant service-call bindings are `operator-declared`: ShowMesh can validate the declaration but cannot infer or verify the physical wiring behind a topic, entity, relay, or downstream automation.
 
-- `powerDomain: presentation|environmental|mixed|unknown`;
-- `domainProvenance: provider|operator-declared`;
-- the named logical action it invokes.
-
-A provider may supply domain provenance only when it can authoritatively identify every target. Generic MQTT and Home Assistant service-call bindings are `operator-declared`: ShowMesh can validate the declaration but cannot infer or verify the physical wiring behind a topic, entity, relay, or downstream automation. Operator surfaces and audit evidence must preserve that distinction.
-
-`power-down-presentation` accepts only bindings declared as `powerDomain: presentation`. It rejects `environmental`, `mixed`, and `unknown` bindings rather than guessing. A deployment may omit the command and all power bindings entirely.
-
-Every presentation power-off binding also declares one removal policy, with no default:
-
-- `immediate`: `immediateSafeAttestation` explicitly records that every target may safely lose power as soon as the action runs;
-- `after-actions`: a non-empty ordered list of required shutdown actions, confirmations, delays, or evidence conditions must complete before removal.
-
-An aggregate binding containing any target that is not safe for immediate removal must use `after-actions`. Prerequisite lists and delays are finite, non-negative, limited by versioned schema bounds, and may not invoke the same power-off binding directly or indirectly. Missing domain, provenance, policy, or prerequisites required by the selected policy makes the configuration invalid. This keeps cooldown behavior configurable without treating it as optional by accident after a device that needs it has been configured.
+Shutdown sequences, the night session's `siteActions` sections, and how emergency stop levels use them are defined in [ADR-065](../decisions/ADR-065-site-actions-and-shutdown-sequences.md). A deployment may configure none of them.
 
 ### 10.3 Optional Home Assistant thermal integration
 
 In the reference installation, Home Assistant owns continuous freeze protection, thermostat cycling, exhaust control, and protection against over-cooling. In severe weather it may heat continuously for days before a show. While projectors run, it may need exhaust fans to remove their heat while maintaining a minimum safe enclosure temperature. This is an installation profile, not a ShowMesh requirement.
 
-ShowMesh does not implement that thermostat. It may invoke a named Home Assistant mode such as `show-preheat`, `projectors-running`, or `standby`, and may observe temperature, mode, and fan/heater state as readiness evidence. Names are installation configuration, not product constants.
+ShowMesh does not implement that thermostat. A prepare-site or end session action ([ADR-065](../decisions/ADR-065-site-actions-and-shutdown-sequences.md)) may invoke a named Home Assistant mode such as `show-preheat`, `projectors-running`, or `standby`, and may observe temperature, mode, and fan/heater state as readiness evidence. Names are installation configuration, not product constants.
 
 If an operator configures a blocking projector-strike temperature interlock, unsafe or stale evidence behaves according to that rule and may block automated strike. An observe-only rule reports the same evidence without blocking. With no rule, ShowMesh assumes no thermal interlock. No posture causes ShowMesh to take over thermostat control.
 
 ### 10.4 Optional safe shutdown
 
-When an `after-actions` removal policy is configured, normal presentation shutdown may:
-
-1. wait for live playback and the presentation fade to finish;
-2. request proper projector shutdown;
-3. observe shutdown where supported;
-4. wait for configured or observed projector cooldown;
-5. remove presentation power through named MQTT/Home Assistant actions;
-6. request the normal environmental standby profile without disabling protection.
-
-An ordinary `immediate` policy is valid only for targets explicitly attested safe for immediate removal. A separately configured manual `force-power-off` action may bypass ordinary prerequisites, but it has its own authorization and audit presentation and is never inferred from the ordinary policy. Deployments without ShowMesh power control expose no such action. Normal scheduled shutdown never silently escalates to it.
-
-For the reference installation, the existing MQTT/Node-RED response-contract action is sufficient. A full Home Assistant control provider may replace the binding later without changing the lifecycle contract. A direct FPP/Home Assistant hard cutoff may exist as an installation-specific final fallback, scheduled beyond its configured maximum show and cooldown window.
+Normal presentation shutdown waits for live playback and the presentation fade to finish, then runs the night's shutdown sequences side by side, each step in order with its delays and confirmation waits, then the night's end session actions. A sequence that stops at a failed step removes no further power. Environmental protection is never part of a sequence. See [ADR-065](../decisions/ADR-065-site-actions-and-shutdown-sequences.md) decisions 5 to 8.
 
 ## 11. Persistence, restart, and loss of coordination
 
@@ -428,22 +404,12 @@ nightSession:
         action: resolume-goodnight-clip
         offsetMs: 6000
 
-  # Entire block is omitted where ShowMesh does not manage site power/climate.
-  siteControl:
-    requestThermalProfile: home-assistant-show-preheat
-    presentationPowerOn:
-      action: site-presentation-on
-      powerDomain: presentation
-      domainProvenance: operator-declared
-    presentationPowerOff:
-      action: site-presentation-off
-      powerDomain: presentation
-      domainProvenance: operator-declared
-      removalPolicy: after-actions
-      prerequisites:
-        - action: projectors-safe-off
-          requireConfirmation: true
-        - delay: 5m
+  # Optional. Global shutdown sequences live in show.sitepower (ADR-065).
+  siteActions:
+    prepareSite: [home-assistant-show-preheat]
+    powerDown:
+      skipSequences: [fm-transmitter]
+    endSession: [home-assistant-standby]
 
   # Each rule is optional and independently observe-only, blocking, or disabled.
   interlocks:

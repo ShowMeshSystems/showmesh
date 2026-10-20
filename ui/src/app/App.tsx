@@ -32,6 +32,7 @@ import { SettingsConnections } from '../screens/SettingsConnections'
 import { SettingsDelivery } from '../screens/SettingsDelivery'
 import { SettingsRecovery } from '../screens/SettingsRecovery'
 import { SettingsWeatherDelay } from '../screens/SettingsWeatherDelay'
+import { SettingsEmergencyStop } from '../screens/SettingsEmergencyStop'
 import { SettingsBrightness } from '../screens/SettingsBrightness'
 import { SettingsAppearance } from '../screens/SettingsAppearance'
 import { SettingsDashboard } from '../screens/SettingsDashboard'
@@ -130,6 +131,7 @@ export default function App() {
               <Route path="delivery" element={<SettingsDelivery />} />
               <Route path="recovery" element={<SettingsRecovery />} />
               <Route path="weather-delay" element={<SettingsWeatherDelay />} />
+              <Route path="emergency-stop" element={<SettingsEmergencyStop />} />
               <Route path="brightness" element={<SettingsBrightness />} />
               <Route path="dashboard" element={<SettingsDashboard />} />
               <Route path="appearance" element={<SettingsAppearance />} />
