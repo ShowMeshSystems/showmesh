@@ -337,6 +337,8 @@ type SchemaWeatherDelayActionResponse = components['schemas']['WeatherDelayActio
 type SchemaWeatherDelayDecisionRequest = components['schemas']['WeatherDelayDecisionRequest']
 type SchemaWeatherDelayDecisionResponse = components['schemas']['WeatherDelayDecisionResponse']
 type SchemaWeatherDelayConfigResponse = components['schemas']['WeatherDelayConfigResponse']
+type SchemaEmergencyStopConfigResponse = components['schemas']['EmergencyStopConfigResponse']
+type SchemaConfigEmergencyStopPayload = components['schemas']['ConfigEmergencyStopPayload']
 type SchemaConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
 
 /**
@@ -4171,6 +4173,26 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.putJson<SchemaWeatherDelayConfigResponse>('/config/show.weatherdelay', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.emergencystop`: each emergency stop level's follow-up actions. */
+  async getEmergencyStopConfig(): Promise<SchemaEmergencyStopConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaEmergencyStopConfigResponse>('/config/show.emergencystop', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/show.emergencystop`: replaces all three levels at once. */
+  async putEmergencyStopConfig(payload: SchemaConfigEmergencyStopPayload): Promise<SchemaEmergencyStopConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaEmergencyStopConfigResponse>('/config/show.emergencystop', payload, controller.signal)
     } finally {
       this.endSideCall(controller)
     }

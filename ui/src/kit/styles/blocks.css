@@ -1643,3 +1643,9 @@ a.sm-tile:hover {
 @media (max-width: 600px) {
   .sm-revdiff__row { grid-template-columns: 1fr; gap: var(--s-1); }
 }
+
+.sm-action-list { display: grid; gap: var(--s-2); }
+.sm-action-list__label { font-weight: 600; margin: 0; }
+.sm-action-list__row { display: flex; align-items: flex-end; gap: var(--s-3); }
+.sm-action-list__row > .sm-field { flex: 1; min-width: 0; }
+.sm-action-list + .sm-action-list { margin-top: var(--s-4); }

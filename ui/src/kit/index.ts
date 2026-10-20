@@ -1,4 +1,5 @@
 export { PreviewGrid, PreviewTile, STALE_FRAME_SECONDS, type PreviewTileState } from './PreviewTile'
+export { ActionList, type ActionOption } from './ActionList'
 export { AttentionRow, StatTile, TileCount, Tiles } from './Attention'
 export { Button, ButtonRow, ButtonRule, ReorderButtons } from './Button'
 export { Callout, DefinitionStrip, Notice, PageTitle, Section, type Definition } from './Blocks'

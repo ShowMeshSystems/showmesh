@@ -39,6 +39,7 @@ import {
   PreviewTile,
   RadioCardList,
   ReorderButtons,
+  ActionList,
   RailBadge,
   RuledStrip,
   AbsenceLabel,
@@ -904,6 +905,19 @@ export function Specimen() {
             <ReorderButtons itemLabel="step 1" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} moveUpReason="Already first." />
             <ReorderButtons itemLabel="Camera 6" orientation="horizontal" leave="hide" onMoveUp={() => {}} onMoveDown={() => {}} onRemove={() => {}} moveDownReason="Already last." />
           </div>
+        </SpecSection>
+        <SpecSection
+          number="18b · Action list"
+          id="specimen-action-list"
+          title="An ordered list of show actions"
+          detail="Each row picks one show action. An id that no longer resolves stays visible and says so."
+        >
+          <ActionList
+            label="Follow-up actions"
+            value={['work-light-on', 'gone-action']}
+            options={[{ id: 'work-light-on', label: 'Work light on' }, { id: 'thermal-standby', label: 'Thermal standby' }]}
+            onChange={() => {}}
+          />
         </SpecSection>
         <SpecSection
           number="19 · Version changes"
