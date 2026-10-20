@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -517,9 +518,17 @@ func printResolumeInstancesConfig(w io.Writer, resp resolumeInstancesConfigRespo
 		return
 	}
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "ID\tURL")
+	_, _ = fmt.Fprintln(tw, "ID\tURL\tOSC PORT\tCONTROL")
 	for _, e := range resp.Payload.Instances {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\n", e.ID, e.URL)
+		port := "7000"
+		if e.OSCPort > 0 {
+			port = strconv.Itoa(e.OSCPort)
+		}
+		control := e.Control
+		if control == "" {
+			control = "rest"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.ID, e.URL, port, control)
 	}
 	_ = tw.Flush()
 }

@@ -1,6 +1,7 @@
 // Package oscfade is ADR-064's Resolume layer fade: Arena's OSC input is
 // positional, write-only and silent (RES-001), so a fade is a ramp of float32
-// messages to /composition/layers/<n>/master that is never confirmed.
+// messages to /composition/layers/<n>/master that is never confirmed. It also
+// sends every other action for an instance controlled over OSC only (ADR-066).
 package oscfade
 
 import (
@@ -70,6 +71,19 @@ func New(host string, port int) *Fader {
 	}
 }
 
+// connectLocked dials the UDP socket on first use. Called with f.mu held.
+func (f *Fader) connectLocked() error {
+	if f.conn != nil {
+		return nil
+	}
+	conn, err := f.dial(f.addr)
+	if err != nil {
+		return err
+	}
+	f.conn = conn
+	return nil
+}
+
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -86,13 +100,9 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // once. done, when non-nil, is called after the ramp ends or is cancelled.
 func (f *Fader) Fade(layerIndex int, from, target float64, d time.Duration, done func()) error {
 	f.mu.Lock()
-	if f.conn == nil {
-		conn, err := f.dial(f.addr)
-		if err != nil {
-			f.mu.Unlock()
-			return err
-		}
-		f.conn = conn
+	if err := f.connectLocked(); err != nil {
+		f.mu.Unlock()
+		return err
 	}
 	if cancel, ok := f.cancels[layerIndex]; ok {
 		cancel()

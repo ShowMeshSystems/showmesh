@@ -28,8 +28,10 @@ import (
 // (Track G seam G-2): the same (id, url) pair SHOWMESH_RESOLUME_URL/
 // SHOWMESH_RESOLUME_ID carried.
 type resolumeInstanceConfig struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+	OSCPort int    `json:"oscPort,omitempty"`
+	Control string `json:"control,omitempty"`
 }
 
 // resolumeInstancesPayload is the "resolume.instances" configuration
@@ -93,7 +95,8 @@ this surface is exactly as sensitive as writing it.
 Subcommands:
   list      show the active configuration
   set       write a new configuration revision naming exactly one instance
-            (--id, --url); at most one instance is supported today
+            (--id, --url, optional --osc-port and --control); at most one
+            instance is supported today
   remove    write a new configuration revision naming zero instances
 
 A configuration change here takes effect without a restart: the
@@ -159,9 +162,12 @@ func cmdResolumeInstanceList(args []string, stdout, stderr io.Writer, clock func
 // (PUT /api/v1/config/resolume.instances with exactly one instance).
 func cmdResolumeInstanceSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl resolume instance set", stderr)
-	var id, url string
+	var id, url, control string
+	var oscPort int
 	fs.StringVar(&id, "id", "", "the instance id (required)")
 	fs.StringVar(&url, "url", "", "the Resolume REST base URL, e.g. http://host:8080 (required)")
+	fs.IntVar(&oscPort, "osc-port", 0, "Arena's OSC input port on the URL's host; 0 means 7000")
+	fs.StringVar(&control, "control", "", "rest (the default) or osc, which sends Arena OSC only and never reads it")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl resolume instance set --id ID --url URL [flags]")
@@ -212,7 +218,7 @@ func cmdResolumeInstanceSet(args []string, stdout, stderr io.Writer, clock func(
 		return reportError(stderr, "resolume instance set", err)
 	}
 
-	payload := resolumeInstancesPayload{Instances: []resolumeInstanceConfig{{ID: id, URL: url}}}
+	payload := resolumeInstancesPayload{Instances: []resolumeInstanceConfig{{ID: id, URL: url, OSCPort: oscPort, Control: control}}}
 	var resp resolumeInstancesConfigResponse
 	if err := c.putJSON(ctx, apiPath, ifMatch, payload, &resp); err != nil {
 		return reportError(stderr, "resolume instance set", err)

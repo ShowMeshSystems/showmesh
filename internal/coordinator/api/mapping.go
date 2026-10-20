@@ -8,6 +8,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -838,12 +839,17 @@ func mapResolumeInstance(rv ResolumeInstanceView, composition *v1.ResolumeInstan
 		obsEvidence = append(obsEvidence, mapEvidence(o, now))
 	}
 
+	control := config.ResolumeControlREST
+	if rv.ControlledOverOSC {
+		control = config.ResolumeControlOSC
+	}
 	return v1.ResolumeInstance{
 		InstanceID:        rv.InstanceID,
 		Health:            string(deriveResolumeHealth(resolved, now)),
 		Observations:      obsEvidence,
 		Composition:       composition,
 		ShowParticipation: participation,
+		Control:           control,
 	}
 }
 

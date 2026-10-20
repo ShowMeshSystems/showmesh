@@ -102,6 +102,7 @@ var resolumeActionParamVocabulary = map[resolume.ActionName][]api.ResolumeAction
 	resolume.ActionFadeLayer: {
 		{Name: "layer", Kind: api.ResolumeActionParamString, Required: true},
 		{Name: "targetPercent", Kind: api.ResolumeActionParamNumber, Required: true},
+		{Name: "fromPercent", Kind: api.ResolumeActionParamNumber, Required: false},
 		{Name: "durationMs", Kind: api.ResolumeActionParamNumber, Required: false},
 	},
 }
@@ -159,7 +160,11 @@ var _ api.ResolumeActionDispatcher = (*resolumeActionDispatcherAdapter)(nil)
 // safety class is exactly the "doc comment claimed one thing, the code did
 // another" shape Step 8's own review finding already cost this project once.
 func (a *resolumeActionDispatcherAdapter) Actions() []api.ResolumeActionDescriptor {
-	descriptors := a.dispatcher.Actions()
+	return translateResolumeActionDescriptors(a.dispatcher.Actions())
+}
+
+// translateResolumeActionDescriptors is [resolumeActionDispatcherAdapter.Actions]' translation.
+func translateResolumeActionDescriptors(descriptors []resolume.ActionDescriptor) []api.ResolumeActionDescriptor {
 	out := make([]api.ResolumeActionDescriptor, 0, len(descriptors))
 	for _, d := range descriptors {
 		auditExempt, err := mapActionSafetyClass(d.SafetyClass)

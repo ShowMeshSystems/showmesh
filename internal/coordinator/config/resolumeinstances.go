@@ -46,7 +46,19 @@ type ResolumeInstance struct {
 	URL string
 	// OSCPort is Arena's OSC input port for layer fades; 0 means 7000.
 	OSCPort int `json:",omitempty"`
+	// Control is how ShowMesh talks to Arena: "" or [ResolumeControlREST]
+	// for REST, or [ResolumeControlOSC] to send OSC only and never touch Arena's web server.
+	Control string `json:",omitempty"`
 }
+
+// The values [ResolumeInstance.Control] takes.
+const (
+	ResolumeControlREST = "rest"
+	ResolumeControlOSC  = "osc"
+)
+
+// ControlledOverOSC reports whether ShowMesh must send this instance OSC only.
+func (i ResolumeInstance) ControlledOverOSC() bool { return i.Control == ResolumeControlOSC }
 
 // ResolumeInstancesPayload is config_revisions.payload_json's decoded shape
 // for [ResolumeInstancesConfigKind]: one JSON object with a single array
@@ -117,7 +129,10 @@ func sortedResolumeInstanceCopy(instances []ResolumeInstance) []ResolumeInstance
 		if out[i].URL != out[j].URL {
 			return out[i].URL < out[j].URL
 		}
-		return out[i].OSCPort < out[j].OSCPort
+		if out[i].OSCPort != out[j].OSCPort {
+			return out[i].OSCPort < out[j].OSCPort
+		}
+		return out[i].Control < out[j].Control
 	})
 	return out
 }
@@ -178,6 +193,12 @@ func ValidateResolumeInstances(instances []ResolumeInstance, fppEndpoints []FPPE
 
 		if inst.OSCPort < 0 || inst.OSCPort > 65535 {
 			return operatorMessage(fmt.Sprintf("Resolume instance %q has OSC port %d, which is not a valid port. Use a port from 1 to 65535.", inst.ID, inst.OSCPort))
+		}
+
+		switch inst.Control {
+		case "", ResolumeControlREST, ResolumeControlOSC:
+		default:
+			return operatorMessage(fmt.Sprintf("Resolume instance %q has control %q, which is not a known setting. Use rest or osc.", inst.ID, inst.Control))
 		}
 
 		if err := ValidateResolumeIDAgainstFPPEndpoints(inst.ID, fppEndpoints); err != nil {

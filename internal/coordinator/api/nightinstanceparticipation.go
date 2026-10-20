@@ -92,6 +92,13 @@ func (h *handlers) nightCheckShowInstanceParticipation(ctx context.Context, now 
 		if !participationCounts(selection.forResolume(rv.InstanceID)) {
 			continue
 		}
+		if rv.ControlledOverOSC {
+			checks = append(checks, nightReadinessCheck{
+				name: nightParticipationCheckPrefix + ":resolume:" + rv.InstanceID, health: nightCheckStateNotVerifiable,
+				reason: fmt.Sprintf("Resolume %s is controlled over OSC, so ShowMesh does not read it. Check Arena on its own screen.", rv.InstanceID),
+			})
+			continue
+		}
 		health := deriveResolumeHealth(ResolveObservations(rv.Observations), now)
 		checks = append(checks, nightParticipationHealthCheck("resolume", "Resolume", rv.InstanceID, health))
 	}

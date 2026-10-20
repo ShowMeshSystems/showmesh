@@ -114,6 +114,8 @@ type FPPLister interface {
 type ResolumeInstanceView struct {
 	InstanceID   string
 	Observations []observation.Observation
+	// ControlledOverOSC means ShowMesh sends this instance OSC only and reads nothing from it.
+	ControlledOverOSC bool
 }
 
 // ResolumeLister lists the coordinator's configured Resolume instances and
