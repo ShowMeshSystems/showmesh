@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { SitePowerTesting } from './SitePowerTesting'
 import {
   ApiError,
   PROBLEM_TYPE,
@@ -543,6 +544,7 @@ export function ShowNight() {
           ]}
         />
         {prepareSite.dialog}
+        <SitePowerTesting />
         <ConfirmDialog
           open={startNightConfirmOpen}
           title="Start the night and its first cycle?"

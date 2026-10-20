@@ -101,6 +101,9 @@ import type {
   WeatherDelayConfigResponse,
   EmergencyStopConfigResponse,
   ConfigEmergencyStopPayload,
+  SitePowerConfigResponse,
+  ConfigSitePowerPayload,
+  SitePowerRunResponse,
   ConfigWeatherDelayPayload,
   SetPrincipalPasswordRequest,
   SetPrincipalRoleRequest,
@@ -628,6 +631,18 @@ export function getEmergencyStopConfig(): Promise<EmergencyStopConfigResponse> {
 
 export function putEmergencyStopConfig(payload: ConfigEmergencyStopPayload): Promise<EmergencyStopConfigResponse> {
   return store.putEmergencyStopConfig(payload)
+}
+
+export function getSitePowerConfig(): Promise<SitePowerConfigResponse> {
+  return store.getSitePowerConfig()
+}
+
+export function putSitePowerConfig(payload: ConfigSitePowerPayload): Promise<SitePowerConfigResponse> {
+  return store.putSitePowerConfig(payload)
+}
+
+export function runSitePower(which: 'on' | 'off'): Promise<SitePowerRunResponse> {
+  return store.runSitePower(which)
 }
 
 // Track B seam B2b-front: the three render.* dispatch endpoints. Same

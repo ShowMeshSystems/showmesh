@@ -2239,6 +2239,13 @@ func New(deps Dependencies, opts Options) *API {
 	// Weather delay (ADR-053). Resume has its own scope, separate from the
 	// invoke scope start and cancel-night share.
 	mux.HandleFunc("GET /api/v1/weather-delay", h.readGuard(identity.ScopeObservationRead, h.handleGetWeatherDelayState))
+	// show.sitepower (ADR-065): shutdown sequences and power-on actions,
+	// and the System power test commands that run them outside a night.
+	mux.HandleFunc("GET /api/v1/config/show.sitepower", h.requireScope(identity.ScopeConfigWrite, h.handleGetSitePowerConfig))
+	mux.HandleFunc("PUT /api/v1/config/show.sitepower", h.writeGuard(&scopeConfigWrite, h.handlePutSitePowerConfig))
+	mux.HandleFunc("GET /api/v1/config/show.sitepower/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetSitePowerConfigRevisions))
+	mux.HandleFunc("POST /api/v1/site-power/on", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleSitePowerOn))
+	mux.HandleFunc("POST /api/v1/site-power/off", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleSitePowerOff))
 	mux.HandleFunc("GET /api/v1/config/show.weatherdelay", h.requireScope(identity.ScopeConfigWrite, h.handleGetWeatherDelayConfig))
 	mux.HandleFunc("PUT /api/v1/config/show.weatherdelay", h.writeGuard(&scopeConfigWrite, h.handlePutWeatherDelayConfig))
 	mux.HandleFunc("GET /api/v1/config/show.weatherdelay/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetWeatherDelayConfigRevisions))
