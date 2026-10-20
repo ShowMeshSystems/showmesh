@@ -1,6 +1,6 @@
 # ADR-065: Site actions and shutdown sequences
 
-Status: Proposed (2026-10-19)
+Status: Accepted (owner, 2026-10-20)
 Date: 2026-10-19
 Supersedes: the `siteControl` block of
 [RESTING-MODE.md](../architecture/RESTING-MODE.md) §10.2, §10.3's
