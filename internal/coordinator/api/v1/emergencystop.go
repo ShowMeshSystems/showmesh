@@ -15,7 +15,8 @@ package v1
 // ConfigEmergencyStopLevelPayload is one level's own optional, ordered
 // follow-up action list. See [ConfigEmergencyStopPayload].
 type ConfigEmergencyStopLevelPayload struct {
-	Actions []string `json:"actions"`
+	Actions       []string `json:"actions"`
+	SkipSequences []string `json:"skipSequences,omitempty"`
 }
 
 // ConfigEmergencyStopPayload is the "show.emergencystop" configuration
@@ -152,6 +153,10 @@ type EmergencyStopResult struct {
 	NightSession          *EmergencyStopNightSessionOutcome `json:"nightSession,omitempty"`
 	FollowUps             []EmergencyStopFollowUpResult     `json:"followUps"`
 	FollowUpConfigError   string                            `json:"followUpConfigError,omitempty"`
+	// ShutdownSequences names the site shutdown sequences this level
+	// started (ADR-065). They finish after the response; results go to
+	// the audit log or, for a night's power down, to the night session.
+	ShutdownSequences []string `json:"shutdownSequences"`
 }
 
 // EmergencyStopResponse is the body of POST .../emergency-stop/stop,

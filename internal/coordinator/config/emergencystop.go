@@ -47,6 +47,9 @@ const emergencyStopActionsMaxCount = 32
 // after that level's own immediate stop.
 type EmergencyStopLevelConfig struct {
 	Actions []string `json:"actions"`
+	// SkipSequences names site shutdown sequences this level leaves out
+	// (ADR-065). Only stopPowerDown and hardStop run sequences.
+	SkipSequences []string `json:"skipSequences,omitempty"`
 }
 
 // EmergencyStopPayload is config_revisions.payload_json's decoded,
@@ -76,7 +79,7 @@ var emergencyStopTopLevelKeys = map[string]bool{"stop": true, "stopPowerDown": t
 
 // emergencyStopLevelKeys is the complete set of keys one level object
 // recognizes.
-var emergencyStopLevelKeys = map[string]bool{"actions": true}
+var emergencyStopLevelKeys = map[string]bool{"actions": true, "skipSequences": true}
 
 // EmergencyStopActionResolver reports whether actionID names an existing
 // show.action object, of any show: an emergency stop is installation-wide,
@@ -184,7 +187,24 @@ func decodeEmergencyStopLevel(top map[string]json.RawMessage, field string, acti
 		}
 	}
 
-	return EmergencyStopLevelConfig{Actions: actions}, nil
+	var skip []string
+	if raw, has := levelTop["skipSequences"]; has && !isJSONNull(raw) {
+		f := field + ".skipSequences"
+		if field == "stop" {
+			return EmergencyStopLevelConfig{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: f, Detail: "Stop does not run shutdown sequences, so it cannot skip one. Remove the list."}
+		}
+		if err := json.Unmarshal(raw, &skip); err != nil {
+			return EmergencyStopLevelConfig{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: f, Detail: "The skipped sequences must be a list of sequence ids. Fix the list."}
+		}
+		seen := map[string]bool{}
+		for _, id := range skip {
+			if !shutdownSequenceIDPattern.MatchString(id) || seen[id] {
+				return EmergencyStopLevelConfig{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: f, Detail: fmt.Sprintf("Sequence %s cannot be skipped twice or by that name. Fix the list.", id)}
+			}
+			seen[id] = true
+		}
+	}
+	return EmergencyStopLevelConfig{Actions: actions, SkipSequences: skip}, nil
 }
 
 // ValidationCodeEmergencyStopActionDuplicate: the same show.action id

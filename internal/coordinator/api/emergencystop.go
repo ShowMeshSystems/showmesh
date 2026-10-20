@@ -613,6 +613,9 @@ func (h *handlers) nightEmergencyPowerDown(ctx context.Context, now time.Time, i
 		return v1.EmergencyStopNightSessionOutcome{Present: false}
 	}
 
+	if err := h.nightMarkEmergencySelection(ctx, now, current); err != nil {
+		h.logWarn("emergency stop: could not mark the power down as forced by emergency stop", "sessionId", current.ID, "error", err)
+	}
 	var attributionDegraded bool
 	out, problem, err := h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 		return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, nightShutdownForced)
@@ -827,6 +830,7 @@ func (h *handlers) handleEmergencyStop(w http.ResponseWriter, r *http.Request) {
 	jsonWrite(w, v1.EmergencyStopResponse{ServerTime: formatTime(now), Result: v1.EmergencyStopResult{
 		Level: emergencyStopLevelStop, IdempotencyKey: idempotencyKey, StopOutcomes: stopOutcomes,
 		NoInstancesConfigured: noInstancesConfigured, NightSession: &nightOutcome, FollowUps: followUps, FollowUpConfigError: configErr,
+		ShutdownSequences: []string{},
 	}})
 }
 
@@ -856,6 +860,18 @@ func (h *handlers) handleEmergencyStopPowerDown(w http.ResponseWriter, r *http.R
 	nightOutcome := h.nightEmergencyPowerDown(ctx, now, issuer)
 	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, idempotencyKey, ac, clientAddr)
 	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
+	// With a night open, its own power down runs the sequences level 2
+	// picked (nightPowerDownSequences). Without one, they run from here.
+	var sequences []string
+	if nightOutcome.Present && nightOutcome.Error == "" {
+		if current, has, err := h.deps.NightSessions.GetCurrentNightSession(ctx); err == nil && has {
+			for _, s := range h.emergencyStopSequences(ctx, payload.StopPowerDown.SkipSequences, &current) {
+				sequences = append(sequences, s.ID)
+			}
+		}
+	} else {
+		sequences = h.startShutdownSequencesBackground(ctx, h.emergencyStopSequences(ctx, payload.StopPowerDown.SkipSequences, nil), false, "emergencystop:"+idempotencyKey, emergencyStopLevelStopPowerDown, ac, clientAddr, issuer)
+	}
 	followUps := h.emergencyStopRunFollowUps(ctx, idempotencyKey, payload.StopPowerDown.Actions, ac, clientAddr)
 
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, emergencyStopAuditEntry(
@@ -864,6 +880,7 @@ func (h *handlers) handleEmergencyStopPowerDown(w http.ResponseWriter, r *http.R
 	jsonWrite(w, v1.EmergencyStopResponse{ServerTime: formatTime(now), Result: v1.EmergencyStopResult{
 		Level: emergencyStopLevelStopPowerDown, IdempotencyKey: idempotencyKey, StopOutcomes: stopOutcomes,
 		NoInstancesConfigured: noInstancesConfigured, NightSession: &nightOutcome, FollowUps: followUps, FollowUpConfigError: configErr,
+		ShutdownSequences: nonNilStrings(sequences),
 	}})
 }
 
@@ -966,9 +983,16 @@ func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Reques
 	ctx := context.WithoutCancel(r.Context())
 	// The session ends first so the night loop cannot see the stopped
 	// player as a finished show and restart the resting playlist.
+	nightBefore, hadNight, nightErr := h.deps.NightSessions.GetCurrentNightSession(ctx)
 	nightOutcome := h.nightEmergencyEndSession(ctx, now, issuer)
 	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, top.IdempotencyKey, ac, clientAddr)
 	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
+	var night *store.NightSessionRecord
+	if nightErr == nil && hadNight {
+		night = &nightBefore
+	}
+	// Hard stop skips every wait: each action goes out at once (ADR-065 decision 8).
+	sequences := h.startShutdownSequencesBackground(ctx, h.emergencyStopSequences(ctx, payload.HardStop.SkipSequences, night), true, "emergencystop:"+top.IdempotencyKey, emergencyStopLevelHardStop, ac, clientAddr, issuer)
 	followUps := h.emergencyStopRunFollowUps(ctx, top.IdempotencyKey, payload.HardStop.Actions, ac, clientAddr)
 
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, emergencyStopAuditEntry(
@@ -977,6 +1001,7 @@ func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Reques
 	jsonWrite(w, v1.EmergencyStopResponse{ServerTime: formatTime(now), Result: v1.EmergencyStopResult{
 		Level: emergencyStopLevelHardStop, IdempotencyKey: top.IdempotencyKey, StopOutcomes: stopOutcomes,
 		NoInstancesConfigured: noInstancesConfigured, NightSession: &nightOutcome, FollowUps: followUps, FollowUpConfigError: configErr,
+		ShutdownSequences: sequences,
 	}})
 }
 

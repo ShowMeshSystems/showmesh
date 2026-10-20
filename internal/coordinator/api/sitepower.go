@@ -427,3 +427,45 @@ func (h *handlers) startSitePowerRun(w http.ResponseWriter, r *http.Request, act
 	w.WriteHeader(http.StatusAccepted)
 	jsonEncode(w, v1.SitePowerRunResponse{ServerTime: formatTime(now), RunID: runID, Started: started, Message: message})
 }
+
+// emergencyStopSequences returns the site sequences a level runs: the
+// global ones less its skip list, plus the open night's own when withNight.
+func (h *handlers) emergencyStopSequences(ctx context.Context, skip []string, night *store.NightSessionRecord) []config.ShutdownSequence {
+	global, _, _, _, err := h.resolveSitePowerConfig(ctx)
+	if err != nil {
+		h.logWarn("emergency stop: could not read the shutdown sequences; none run", "error", err)
+		return nil
+	}
+	seqs := config.SequencesExcept(global.ShutdownSequences, skip)
+	if night != nil {
+		if payload, perr := h.getPinnedNightSessionPayload(ctx, *night); perr == nil && payload.SiteActions != nil && payload.SiteActions.PowerDown != nil {
+			seqs = append(seqs, payload.SiteActions.PowerDown.AdditionalSequences...)
+		}
+	}
+	return seqs
+}
+
+// startShutdownSequencesBackground runs seqs after the caller has answered
+// and writes one audit entry when they finish.
+func (h *handlers) startShutdownSequencesBackground(ctx context.Context, seqs []config.ShutdownSequence, noWait bool, cmdPrefix, trigger string, ac authContext, clientAddr string, issuer identity.AuditEntry) []string {
+	ids := make([]string, 0, len(seqs))
+	for _, s := range seqs {
+		ids = append(ids, s.ID)
+	}
+	if len(seqs) == 0 {
+		return ids
+	}
+	bg := context.WithoutCancel(ctx)
+	h.sitePowerRuns.Add(1)
+	go func() {
+		defer h.sitePowerRuns.Done()
+		results := h.runShutdownSequencesLive(bg, seqs, noWait, cmdPrefix, ac, clientAddr)
+		entry := issuer
+		entry.Action = auditActionSitePowerOff
+		entry.Target = config.ShowSitePowerConfigKind
+		entry.Kind = identity.AuditOutcome
+		entry.Params = map[string]any{"trigger": trigger, "sequences": results}
+		h.writeBestEffortAuditBounded(bg, h.now(), degradedAttributionReasonPostDispatch, entry)
+	}()
+	return ids
+}

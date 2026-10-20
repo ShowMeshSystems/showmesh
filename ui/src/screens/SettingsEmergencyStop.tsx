@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react'
-import { getEmergencyStopConfig, listConfigObjects, putEmergencyStopConfig, type ConfigEmergencyStopPayload } from '../api'
-import { ActionList, Button, RuledStrip, Section, type ActionOption } from '../kit'
+import { getEmergencyStopConfig, getSitePowerConfig, listConfigObjects, putEmergencyStopConfig, type ConfigEmergencyStopPayload, type ConfigShutdownSequence } from '../api'
+import { ActionList, Button, Choice, RuledStrip, Section, type ActionOption } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 
 type Level = 'stop' | 'stopPowerDown' | 'hardStop'
 
-const LEVELS: readonly { key: Level; title: string; detail: string }[] = [
+const LEVELS: readonly { key: Level; title: string; detail: string; sequences?: string }[] = [
   { key: 'stop', title: 'Stop', detail: 'Runs after the show stops and the night is held.' },
-  { key: 'stopPowerDown', title: 'Stop and power down', detail: 'Runs after the show stops and the night starts its normal power down.' },
-  { key: 'hardStop', title: 'Hard stop', detail: 'Runs after the show stops and the night ends with no waiting.' },
+  { key: 'stopPowerDown', title: 'Stop and power down', detail: 'Runs after the show stops and the night starts its normal power down.', sequences: 'Shutdown sequences run with their waits. Untick one to leave it out.' },
+  { key: 'hardStop', title: 'Hard stop', detail: 'Runs after the show stops and the night ends with no waiting.', sequences: 'Every action in a ticked sequence goes out at once, with no waits. Untick one to leave it out.' },
 ]
 
 const emptyPayload = (): ConfigEmergencyStopPayload => ({ stop: { actions: [] }, stopPowerDown: { actions: [] }, hardStop: { actions: [] } })
@@ -22,6 +22,7 @@ export function SettingsEmergencyStop() {
   const [draft, setDraft] = useState<ConfigEmergencyStopPayload>(emptyPayload)
   const [revision, setRevision] = useState(0)
   const [options, setOptions] = useState<ActionOption[]>([])
+  const [sequences, setSequences] = useState<ConfigShutdownSequence[]>([])
   const [readError, setReadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -29,9 +30,10 @@ export function SettingsEmergencyStop() {
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([getEmergencyStopConfig(), listConfigObjects('show.action')])
-      .then(([cfg, actions]) => {
+    Promise.all([getEmergencyStopConfig(), listConfigObjects('show.action'), getSitePowerConfig().catch(() => null)])
+      .then(([cfg, actions, site]) => {
         if (cancelled) return
+        setSequences(site?.payload.shutdownSequences ?? [])
         setLoaded(cfg.payload)
         setDraft(cfg.payload)
         setRevision(cfg.revision)
@@ -80,6 +82,26 @@ export function SettingsEmergencyStop() {
           </p>
           {LEVELS.map((level) => (
             <Section key={level.key} id={`st-estop-${level.key}`} title={level.title} detail={level.detail}>
+              {level.sequences !== undefined && (
+                <div className="sm-action-list">
+                  <p className="sm-action-list__label">Shutdown sequences</p>
+                  <p className="sm-small sm-muted">{level.sequences}</p>
+                  {sequences.length === 0 && <p className="sm-small sm-faint">No shutdown sequences are set up in Site settings.</p>}
+                  {sequences.map((seq) => {
+                    const skip = draft[level.key].skipSequences ?? []
+                    return (
+                      <Choice
+                        key={seq.id}
+                        type="checkbox"
+                        label={seq.label}
+                        checked={!skip.includes(seq.id)}
+                        disabled={editReason !== undefined}
+                        onChange={(e) => setDraft((d) => ({ ...d, [level.key]: { ...d[level.key], skipSequences: e.target.checked ? skip.filter((id) => id !== seq.id) : [...skip, seq.id] } }))}
+                      />
+                    )
+                  })}
+                </div>
+              )}
               <ActionList
                 label="Follow-up actions"
                 value={draft[level.key].actions}

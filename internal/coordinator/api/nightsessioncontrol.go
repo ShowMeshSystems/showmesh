@@ -1489,7 +1489,9 @@ func (h *handlers) nightPowerDownPresentationApply(ctx context.Context, tx *stor
 	if next.State == nightStateStopped && next.PowerPhase == "" {
 		phase := nightShutdownPowerPhaseNotConfigured
 		if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, next); err == nil {
-			if global, gerr := sitePowerSequencesTx(ctx, tx); gerr == nil && len(payload.SiteActions.PowerDownSequences(global)) > 0 {
+			// Any sequence at all counts: the loop resolves an empty
+			// selection to not_configured once it reads the skip list.
+			if global, gerr := sitePowerSequencesTx(ctx, tx); gerr == nil && (len(global) > 0 || len(payload.SiteActions.PowerDownSequences(nil)) > 0) {
 				phase = nightPowerPhaseConfiguredNotDispatched
 			}
 		}

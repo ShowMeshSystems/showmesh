@@ -8,6 +8,7 @@ const stubs = vi.hoisted(() => ({
   getEmergencyStopConfig: vi.fn(),
   putEmergencyStopConfig: vi.fn(),
   listConfigObjects: vi.fn(),
+  getSitePowerConfig: vi.fn(),
 }))
 
 vi.mock('../api', async () => {
@@ -39,7 +40,21 @@ describe('SettingsEmergencyStop', () => {
     vi.clearAllMocks()
   })
 
+  it('leaves the FM transmitter out of the hard stop', async () => {
+    stubs.getEmergencyStopConfig.mockResolvedValue(response([]))
+    stubs.listConfigObjects.mockResolvedValue({ objects: [] })
+    stubs.getSitePowerConfig.mockResolvedValue({ payload: { shutdownSequences: [{ id: 'fm', label: 'FM transmitter', steps: [] }], powerOnActions: [] } })
+    stubs.putEmergencyStopConfig.mockResolvedValue(response([], 2))
+    renderTab(['config:write'])
+    const boxes = await screen.findAllByRole('checkbox', { name: 'FM transmitter' })
+    expect(boxes).toHaveLength(2)
+    fireEvent.click(boxes[1] as HTMLElement)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(stubs.putEmergencyStopConfig).toHaveBeenCalledWith({ stop: { actions: [] }, stopPowerDown: { actions: [] }, hardStop: { actions: [], skipSequences: ['fm'] } }))
+  })
+
   it('adds a hard stop follow-up from the action list and saves all three levels', async () => {
+    stubs.getSitePowerConfig.mockResolvedValue({ payload: { shutdownSequences: [], powerOnActions: [] } })
     stubs.getEmergencyStopConfig.mockResolvedValue(response([]))
     stubs.listConfigObjects.mockResolvedValue({ objects: [{ id: 'work-light-on', label: 'Work light on', show: 'halloween', currentRevision: 1, updatedAt: '' }] })
     stubs.putEmergencyStopConfig.mockResolvedValue(response(['work-light-on'], 2))
@@ -56,6 +71,7 @@ describe('SettingsEmergencyStop', () => {
   })
 
   it('shows an action that no longer exists and refuses edits without config:write', async () => {
+    stubs.getSitePowerConfig.mockResolvedValue({ payload: { shutdownSequences: [], powerOnActions: [] } })
     stubs.getEmergencyStopConfig.mockResolvedValue(response(['deleted-action']))
     stubs.listConfigObjects.mockResolvedValue({ objects: [] })
     renderTab([])

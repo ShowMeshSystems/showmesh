@@ -116,6 +116,7 @@ type emergencyStopResult struct {
 	NoInstancesConfigured bool                              `json:"noInstancesConfigured"`
 	NightSession          *emergencyStopNightSessionOutcome `json:"nightSession"`
 	FollowUps             []emergencyStopFollowUpResult     `json:"followUps"`
+	ShutdownSequences     []string                          `json:"shutdownSequences"`
 	FollowUpConfigError   string                            `json:"followUpConfigError"`
 }
 
@@ -367,6 +368,9 @@ func reportEmergencyStopResult(stdout io.Writer, cmdLabel string, result emergen
 			outcome = "unresolved"
 		}
 		_, _ = fmt.Fprintf(stdout, "follow-up (best-effort, does not affect exit code): %s: %s: %s\n", outcome, label, f.OutcomeReason)
+	}
+	if len(result.ShutdownSequences) > 0 {
+		_, _ = fmt.Fprintf(stdout, "shutdown sequences started (results in the activity log): %v\n", result.ShutdownSequences)
 	}
 	return exitCodeForEmergencyStopResult(result)
 }

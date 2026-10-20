@@ -200,8 +200,8 @@ func (h *handlers) emergencyStopActionResolver(ctx context.Context) config.Emerg
 func mapEmergencyStopPayload(p config.EmergencyStopPayload) v1.ConfigEmergencyStopPayload {
 	return v1.ConfigEmergencyStopPayload{
 		Stop:          v1.ConfigEmergencyStopLevelPayload{Actions: nonNilStrings(p.Stop.Actions)},
-		StopPowerDown: v1.ConfigEmergencyStopLevelPayload{Actions: nonNilStrings(p.StopPowerDown.Actions)},
-		HardStop:      v1.ConfigEmergencyStopLevelPayload{Actions: nonNilStrings(p.HardStop.Actions)},
+		StopPowerDown: v1.ConfigEmergencyStopLevelPayload{Actions: nonNilStrings(p.StopPowerDown.Actions), SkipSequences: p.StopPowerDown.SkipSequences},
+		HardStop:      v1.ConfigEmergencyStopLevelPayload{Actions: nonNilStrings(p.HardStop.Actions), SkipSequences: p.HardStop.SkipSequences},
 	}
 }
 
