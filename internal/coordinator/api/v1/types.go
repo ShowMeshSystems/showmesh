@@ -584,6 +584,9 @@ type ResolumeInstance struct {
 	// ShowParticipation is whether this instance takes part in the show
 	// currently active; see [InstanceShowParticipation].
 	ShowParticipation InstanceShowParticipation `json:"showParticipation"`
+
+	// Control is "rest" or "osc"; with "osc" ShowMesh never reads Arena.
+	Control string `json:"control,omitempty"`
 }
 
 // ResolumeInstancesResponse is the body of GET /resolume/instances.
@@ -1182,6 +1185,8 @@ type ConfigResolumeInstance struct {
 	ID      string `json:"id"`
 	URL     string `json:"url"`
 	OSCPort int    `json:"oscPort,omitempty"`
+	// Control is "rest" (the default when absent) or "osc", which sends Arena OSC only.
+	Control string `json:"control,omitempty"`
 }
 
 // ConfigResolumeInstancesPayload is the "resolume.instances" configuration

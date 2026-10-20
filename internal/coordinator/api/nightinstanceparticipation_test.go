@@ -288,3 +288,22 @@ func TestPutShowSignalsTheStreamHub(t *testing.T) {
 		t.Fatalf("stream pokes after a participation write = %d, want 1", pokes)
 	}
 }
+
+func TestNightParticipationOSCControlledResolumeIsNotVerifiableNotFailed(t *testing.T) {
+	view := reachableResolumeView(t, "arena-1", false)
+	view.ControlledOverOSC = true
+	api, _, _ := newNightParticipationFixture(t,
+		`{"name":"Halloween 2026","notes":"","fppInstances":[],"resolumeInstances":["arena-1"]}`,
+		nil, []ResolumeInstanceView{view})
+
+	c, ok := findCheck(nightParticipationChecks(t, api), "participation:resolume:arena-1")
+	if !ok {
+		t.Fatalf("no participation check for the OSC-controlled Resolume")
+	}
+	if c.health != nightCheckStateNotVerifiable {
+		t.Errorf("health = %q, want %q so readiness neither fails nor warns", c.health, nightCheckStateNotVerifiable)
+	}
+	if !strings.Contains(c.reason, "controlled over OSC") {
+		t.Errorf("reason = %q, want it to say Resolume is controlled over OSC", c.reason)
+	}
+}

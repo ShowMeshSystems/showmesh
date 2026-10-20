@@ -5646,6 +5646,8 @@ paths:
         regardless of the auto-restore toggle. Each eligible layer's own
         restore is an ordinary `launchClip` dispatch and inherits every
         D-3 guard (the identity gate, the deck refusal, confirmation).
+        Refused with `409` when the Resolume instance is controlled over
+        OSC (ADR-066), since nothing can be read back to restore from.
       responses:
         "200":
           description: OK
@@ -5662,6 +5664,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /resolume/instances:
@@ -12951,6 +12955,13 @@ components:
             - type: "null"
         showParticipation:
           $ref: "#/components/schemas/InstanceShowParticipation"
+        control:
+          type: string
+          enum: [rest, osc]
+          description: >-
+            How ShowMesh controls this Arena. When osc, ShowMesh does not
+            read Arena at all: every observation is not_collected, saying
+            so, and health is unknown.
     ResolumeInstancesResponse:
       type: object
       required: [serverTime, instances]
@@ -15673,7 +15684,17 @@ components:
           maximum: 65535
           description: >-
             Arena's OSC input port on the url's host, used by fadeLayer
-            (ADR-064). Absent means 7000, Arena's default.
+            (ADR-064) and by every action when control is osc. Absent
+            means 7000, Arena's default.
+        control:
+          type: string
+          enum: [rest, osc]
+          description: >-
+            How ShowMesh controls this Arena (ADR-066). rest, the default
+            when absent, reads and commands Arena over its web server. osc
+            sends every action over OSC and never contacts Arena's web
+            server, so nothing about Arena is observed or confirmed and
+            automatic recovery does not run. GET always reports the value.
     ConfigResolumeInstancesPayload:
       type: object
       description: >-
@@ -16872,6 +16893,14 @@ components:
               minimum: 0
               maximum: 100
               description: The master level to fade to, in percent.
+            fromPercent:
+              type: number
+              minimum: 0
+              maximum: 100
+              description: >-
+                The level to fade from when Arena is controlled over OSC
+                and ShowMesh has not yet sent this layer a level. Ignored
+                over REST, which reads the live level.
             durationMs:
               type: integer
               minimum: 0

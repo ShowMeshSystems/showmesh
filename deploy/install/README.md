@@ -49,10 +49,15 @@ unless `--reenroll` is given.
 
 Before an upgrade changes anything, the installer asks the coordinator whether
 a night session is running and refuses if one is (or if it cannot be asked),
-unless `--force` is given. It then stops the coordinator only while it copies its
-database, `.env` and broker files to `/var/backups/showmesh/<time>-<old
-version>/` with the restore steps in `RESTORE.txt`, and keeps the newest five
-backups. If the copy fails, nothing is upgraded. A coordinator upgrade ends by
+unless `--force` is given. It then copies the coordinator's data, `.env` and
+broker files to `/var/backups/showmesh/<time>-<old version>/` with the restore
+steps in `RESTORE.txt`, and keeps the newest five backups. Media files are
+copied with the coordinator still running, and a file that is unchanged since
+the previous backup is hardlinked to it rather than copied again. The coordinator
+is stopped only for a final pass that copies the database and anything uploaded
+during the first pass. Without `rsync` the installer falls back to copying
+everything with `docker cp` while the coordinator is stopped. If the copy fails,
+nothing is upgraded. A coordinator upgrade ends by
 printing the one-line upgrade command for each node that is not yet on the new
 version. An enrolled node's upgrade asks the same night question when it can,
 and only warns when it cannot.

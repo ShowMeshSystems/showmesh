@@ -387,6 +387,14 @@ func (h *handlers) handlePostResolumeRecoveryRestore(w http.ResponseWriter, r *h
 	layerCount := len(h.deps.ResolumeRecovery.Record())
 	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(resolumeRecoveryRestoreDeadline(layerCount)))
 
+	if h.anyResolumeControlledOverOSC(r.Context()) {
+		writeProblem(w, h.logger, now, v1.Problem{
+			Type: ProblemTypeConflict, Title: "Resolume cannot be restored automatically", Status: http.StatusConflict,
+			Detail: "Resolume is controlled over OSC, so ShowMesh cannot restore it automatically. Restore it in Arena.",
+		})
+		return
+	}
+
 	bgCtx := context.WithoutCancel(r.Context())
 	report, err := h.deps.ResolumeRecovery.Restore(bgCtx, ac.result.Principal.Name)
 	if err != nil {
@@ -397,6 +405,20 @@ func (h *handlers) handlePostResolumeRecoveryRestore(w http.ResponseWriter, r *h
 	h.writeResolumeRecoveryRestoreAuditBounded(bgCtx, now, RestoreTriggerManual(report), ac, r)
 
 	jsonWrite(w, v1.ResolumeRecoveryRestoreResponse{ServerTime: formatTime(h.now()), Restore: mapResolumeRecoveryRestoreReport(report)})
+}
+
+// anyResolumeControlledOverOSC reports whether a configured Resolume instance is set to OSC control.
+func (h *handlers) anyResolumeControlledOverOSC(ctx context.Context) bool {
+	views, err := h.deps.Resolume.ListInstances(ctx)
+	if err != nil {
+		return false
+	}
+	for _, v := range views {
+		if v.ControlledOverOSC {
+			return true
+		}
+	}
+	return false
 }
 
 // RestoreTriggerManual is a tiny accessor so the audit call site below

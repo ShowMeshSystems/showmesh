@@ -821,3 +821,33 @@ func TestWeatherDelayEnforceSurvivesAPanicInOnePlayersPass(t *testing.T) {
 		t.Fatalf("healthy player commands = %v, want Stop Now despite another player's pass panicking", cmds)
 	}
 }
+
+func TestWeatherDelayGroupDoesNotWaitOnAnOSCControlledResolume(t *testing.T) {
+	h := newEnforceHarness(t, nil)
+	h.deps.Resolume = &fakeResolumeLister{views: []ResolumeInstanceView{{InstanceID: "resolume-01", ControlledOverOSC: true}}}
+	setWeatherDelayPowerGroupsForTest(t, h.st, []config.WeatherDelayPowerGroupPayload{{
+		ID: "group-a", Label: "Front Yard", FPPInstanceIDs: []string{}, ResolumeInstanceIDs: []string{"resolume-01"}, RenderNodeIDs: []string{},
+		Heartbeat: config.WeatherDelayHeartbeatPayload{Enabled: true, IntervalSeconds: 30},
+	}})
+	hs := h.handlers()
+	payload, _, _, _, err := resolveWeatherDelayConfig(context.Background(), hs.deps.Config)
+	if err != nil {
+		t.Fatalf("resolve config: %v", err)
+	}
+
+	h.setState(false, 4)
+	dark, members := hs.weatherDelayGroupDarkness(context.Background(), h.now, payload.PowerGroups[0])
+	if dark || !strings.Contains(members[0].Reason, "controlled over OSC") {
+		t.Fatalf("inactive delay: dark = %v, members = %+v, want not dark with an OSC reason", dark, members)
+	}
+
+	h.setState(true, 5)
+	dark, members = hs.weatherDelayGroupDarkness(context.Background(), h.now, payload.PowerGroups[0])
+	if !dark || !strings.Contains(members[0].Reason, "was sent the blackout over OSC, but ShowMesh cannot check") {
+		t.Fatalf("active delay: dark = %v, members = %+v, want the OSC Resolume not to hold the group back", dark, members)
+	}
+	h.enforcer().tick(context.Background(), h.now)
+	if got := h.pub.darkPublishCount("group-a"); got != 1 {
+		t.Fatalf("dark heartbeat publish count = %d, want 1", got)
+	}
+}

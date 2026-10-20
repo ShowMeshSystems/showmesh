@@ -227,7 +227,7 @@ jobs:
       - name: Restore the Go build cache
         id: gocache_restore
         if: needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ${{ steps.gocache.outputs.build }}
@@ -395,7 +395,7 @@ jobs:
           && needs.changed-files.outputs.docs_only != 'true' && needs.changed-files.outputs.ui_only != 'true'
           && steps.gocache_restore.outputs.cache-hit != 'true'
           && (!startsWith(matrix.part, 'api-') || startsWith(matrix.part, 'api-1-'))
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ${{ steps.gocache.outputs.build }}

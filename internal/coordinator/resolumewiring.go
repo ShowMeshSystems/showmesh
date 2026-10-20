@@ -128,6 +128,25 @@ func notYetPolledResolumeObservations(instanceID string, now time.Time) []observ
 	return out
 }
 
+// resolumeOSCNotReadReason is what every Resolume signal reports for an instance controlled over OSC.
+const resolumeOSCNotReadReason = "Resolume is controlled over OSC, so ShowMesh does not read it. Check Arena on its own screen."
+
+// oscControlledResolumeObservations reports every static Resolume signal as
+// not collected, naming why, so OSC control never reads as down or healthy.
+func oscControlledResolumeObservations(instanceID string, now time.Time) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceResolume, ID: instanceID}
+	out := make([]observation.Observation, 0, len(resolumeSignals))
+	for _, sig := range resolumeSignals {
+		o, err := observation.NotCollected(res, sig, resolumeOSCNotReadReason,
+			observation.WithSource(resolumeCollectorSourceID), observation.WithCollectedAt(now))
+		if err != nil {
+			panic(fmt.Sprintf("coordinator: oscControlledResolumeObservations(%q, %q): %v", instanceID, sig, err))
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
 // resolumeWiring is what newResolumeWiring hands back to coordinator.go's
 // Run: the collector (Track D seam D-2/C), the watcher, and the
 // collector's own status lister for apiDeps.Collectors. watcher and

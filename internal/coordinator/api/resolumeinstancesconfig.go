@@ -163,7 +163,12 @@ func decodeResolumeInstancesConfigPutBody(body io.Reader) ([]config.ResolumeInst
 
 	instances := make([]config.ResolumeInstance, 0, len(wire))
 	for _, e := range wire {
-		instances = append(instances, config.ResolumeInstance{ID: e.ID, URL: e.URL, OSCPort: e.OSCPort})
+		control := e.Control
+		if control == config.ResolumeControlREST {
+			// Stored empty so a REST instance's payload stays what it was before control existed.
+			control = ""
+		}
+		instances = append(instances, config.ResolumeInstance{ID: e.ID, URL: e.URL, OSCPort: e.OSCPort, Control: control})
 	}
 	return instances, nil
 }
@@ -300,6 +305,17 @@ func (h *handlers) handlePutResolumeInstancesConfig(w http.ResponseWriter, r *ht
 	}, instances))
 }
 
+// resolumeInstanceControl is inst's control setting as the API reports it, never empty.
+func resolumeInstanceControl(inst config.ResolumeInstance) string {
+	if inst.ControlledOverOSC() {
+		return config.ResolumeControlOSC
+	}
+	if inst.Control == "" {
+		return config.ResolumeControlREST
+	}
+	return inst.Control
+}
+
 // resolumeInstancesRestartRequiredReason mirrors restartRequiredReason
 // (config.go): the collector set follows this configuration within about
 // ten seconds, no restart needed — Track G seam G-2 applies ADR-036 to this
@@ -310,7 +326,7 @@ const resolumeInstancesRestartRequiredReason = "This change is already in effect
 func mapResolumeInstancesConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, instances []config.ResolumeInstance) v1.ResolumeInstancesConfigResponse {
 	payload := v1.ConfigResolumeInstancesPayload{Instances: make([]v1.ConfigResolumeInstance, 0, len(instances))}
 	for _, inst := range instances {
-		payload.Instances = append(payload.Instances, v1.ConfigResolumeInstance{ID: inst.ID, URL: inst.URL, OSCPort: inst.OSCPort})
+		payload.Instances = append(payload.Instances, v1.ConfigResolumeInstance{ID: inst.ID, URL: inst.URL, OSCPort: inst.OSCPort, Control: resolumeInstanceControl(inst)})
 	}
 	return v1.ResolumeInstancesConfigResponse{
 		ServerTime:             formatTime(now),

@@ -404,6 +404,9 @@ func (h *handlers) weatherDelayFPPMemberDark(ctx context.Context, now time.Time,
 const weatherDelayResolumeLayerActiveClipNone = "none: no clip is connected on this layer"
 
 func (h *handlers) weatherDelayResolumeMemberDark(ctx context.Context, now time.Time, instanceID string) (bool, string) {
+	if h.resolumeControlledOverOSC(ctx, instanceID) {
+		return h.weatherDelayOSCResolumeMemberDark(ctx, instanceID)
+	}
 	kind := observation.ResourceResolume
 	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &instanceID})
 	if err != nil {
@@ -425,6 +428,30 @@ func (h *handlers) weatherDelayResolumeMemberDark(ctx context.Context, now time.
 		}
 	}
 	return true, ""
+}
+
+// weatherDelayOSCResolumeMemberDark never holds a group back once the delay
+// has sent its blackout, because Resolume over OSC can never be read (ADR-066).
+func (h *handlers) weatherDelayOSCResolumeMemberDark(ctx context.Context, instanceID string) (bool, string) {
+	rec, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
+	if err != nil || !rec.Active {
+		return false, fmt.Sprintf("Resolume %s is controlled over OSC, so ShowMesh cannot check that it is dark. Check Arena on its own screen.", instanceID)
+	}
+	return true, fmt.Sprintf("Resolume %s was sent the blackout over OSC, but ShowMesh cannot check that it is dark. Check Arena on its own screen.", instanceID)
+}
+
+// resolumeControlledOverOSC reports whether instanceID is a configured Resolume instance set to OSC control.
+func (h *handlers) resolumeControlledOverOSC(ctx context.Context, instanceID string) bool {
+	views, err := h.deps.Resolume.ListInstances(ctx)
+	if err != nil {
+		return false
+	}
+	for _, v := range views {
+		if v.InstanceID == instanceID {
+			return v.ControlledOverOSC
+		}
+	}
+	return false
 }
 
 // isResolumeActiveClipSignal reports whether sig is

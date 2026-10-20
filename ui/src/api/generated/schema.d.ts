@@ -1876,7 +1876,7 @@ export interface paths {
         put?: never;
         /**
          * Manually run the crash-recovery restore (Track D seam D-3a)
-         * @description Requires `resolume:action`. Runs the same restore the automatic gate runs, without the crash-return gate's own settle wait or identity-freshness check - an operator invoking this on demand is not resolving a specific crash-return race. Always attempts, regardless of the auto-restore toggle. Each eligible layer's own restore is an ordinary `launchClip` dispatch and inherits every D-3 guard (the identity gate, the deck refusal, confirmation).
+         * @description Requires `resolume:action`. Runs the same restore the automatic gate runs, without the crash-return gate's own settle wait or identity-freshness check - an operator invoking this on demand is not resolving a specific crash-return race. Always attempts, regardless of the auto-restore toggle. Each eligible layer's own restore is an ordinary `launchClip` dispatch and inherits every D-3 guard (the identity gate, the deck refusal, confirmation). Refused with `409` when the Resolume instance is controlled over OSC (ADR-066), since nothing can be read back to restore from.
          */
         post: operations["restoreResolumeRecovery"];
         delete?: never;
@@ -4433,6 +4433,11 @@ export interface components {
             observations: components["schemas"]["Evidence"][];
             composition: components["schemas"]["ResolumeInstanceComposition"] | null;
             showParticipation: components["schemas"]["InstanceShowParticipation"];
+            /**
+             * @description How ShowMesh controls this Arena. When osc, ShowMesh does not read Arena at all: every observation is not_collected, saying so, and health is unknown.
+             * @enum {string}
+             */
+            control?: "rest" | "osc";
         };
         ResolumeInstancesResponse: {
             /** Format: date-time */
@@ -5511,8 +5516,13 @@ export interface components {
         ConfigResolumeInstance: {
             id: string;
             url: string;
-            /** @description Arena's OSC input port on the url's host, used by fadeLayer (ADR-064). Absent means 7000, Arena's default. */
+            /** @description Arena's OSC input port on the url's host, used by fadeLayer (ADR-064) and by every action when control is osc. Absent means 7000, Arena's default. */
             oscPort?: number;
+            /**
+             * @description How ShowMesh controls this Arena (ADR-066). rest, the default when absent, reads and commands Arena over its web server. osc sends every action over OSC and never contacts Arena's web server, so nothing about Arena is observed or confirmed and automatic recovery does not run. GET always reports the value.
+             * @enum {string}
+             */
+            control?: "rest" | "osc";
         };
         /**
          * @description The "resolume.instances" configuration kind's payload: the body PUT /config/resolume.instances accepts, and the "payload" member of GET /config/resolume.instances' response. instances is never null - an empty configured-instances list is a real, valid state, and it is the only way to deliberately configure zero instances; an absent or null "instances" key on a PUT is a `400`, never a silent wipe. At most one instance is accepted today (enforced by validation, not by this schema - see `PUT /config/resolume.instances`'s own description).
@@ -6027,6 +6037,8 @@ export interface components {
                 layer: string;
                 /** @description The master level to fade to, in percent. */
                 targetPercent: number;
+                /** @description The level to fade from when Arena is controlled over OSC and ShowMesh has not yet sent this layer a level. Ignored over REST, which reads the live level. */
+                fromPercent?: number;
                 /** @description How long the fade takes. Absent or 0 sets the level at once. */
                 durationMs?: number;
             };
@@ -13183,6 +13195,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

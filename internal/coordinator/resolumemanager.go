@@ -133,7 +133,7 @@ func (s *resolumeInstanceSource) logWarn(msg string, err error) {
 type resolumeBundle struct {
 	instance        config.ResolumeInstance
 	wiring          resolumeWiring
-	actions         *resolumeActionDispatcherAdapter
+	actions         api.ResolumeActionDispatcher
 	recoveryAdapter *resolumeRecoveryAdapter
 	osc             *oscfade.Fader
 	cancel          context.CancelFunc
@@ -213,7 +213,7 @@ func (m *resolumeManager) SetWebSocketEnabled(enabled bool) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.bundle != nil {
+	if m.bundle != nil && m.bundle.wiring.collector != nil {
 		m.bundle.wiring.collector.Footprint().SetWebSocketEnabled(enabled)
 	}
 }
@@ -234,6 +234,9 @@ func (m *resolumeManager) SetWebSocketEnabled(enabled bool) {
 // solved the same way: a local holder the closures capture by reference,
 // populated once construction finishes.
 func (m *resolumeManager) buildBundle(ctx context.Context, inst config.ResolumeInstance) (*resolumeBundle, error) {
+	if inst.ControlledOverOSC() {
+		return m.buildOSCBundle(inst), nil
+	}
 	instCfg := m.baseCfg
 	instCfg.ResolumeURL = inst.URL
 	instCfg.ResolumeID = inst.ID
@@ -279,6 +282,16 @@ func (m *resolumeManager) buildBundle(ctx context.Context, inst config.ResolumeI
 	}()
 
 	return b, nil
+}
+
+// buildOSCBundle builds an OSC-only bundle (ADR-066): no collector, no
+// watcher and no recovery, so nothing ever contacts Arena's web server.
+func (m *resolumeManager) buildOSCBundle(inst config.ResolumeInstance) *resolumeBundle {
+	var osc *oscfade.Fader
+	if u, err := url.Parse(inst.URL); err == nil && u.Hostname() != "" {
+		osc = oscfade.New(u.Hostname(), inst.OSCPort)
+	}
+	return &resolumeBundle{instance: inst, actions: newResolumeOSCActionDispatcher(m.compositionStore, osc), osc: osc, cancel: func() {}}
 }
 
 // stopCurrentLocked tears down m.bundle (must be non-nil) and clears it.
@@ -376,12 +389,18 @@ func (m *resolumeManager) Run(ctx context.Context, source *resolumeInstanceSourc
 // --- api.ResolumeLister / api.CollectorStatusLister ------------------------
 
 func (m *resolumeManager) currentInstanceID() string {
+	id, _ := m.currentInstance()
+	return id
+}
+
+// currentInstance returns the configured instance id and whether it is controlled over OSC.
+func (m *resolumeManager) currentInstance() (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.bundle == nil {
-		return ""
+		return "", false
 	}
-	return m.bundle.instance.ID
+	return m.bundle.instance.ID, m.bundle.instance.ControlledOverOSC()
 }
 
 // ListInstances implements [api.ResolumeLister], delegating to a freshly
@@ -392,19 +411,27 @@ func (m *resolumeManager) currentInstanceID() string {
 // a value handed to api.Dependencies directly. It is resolved fresh on
 // every call now, which is what makes it true instead.
 func (m *resolumeManager) ListInstances(ctx context.Context) ([]api.ResolumeInstanceView, error) {
-	return resolumeInstanceLister{st: m.st, instanceID: m.currentInstanceID()}.ListInstances(ctx)
+	id, overOSC := m.currentInstance()
+	if overOSC {
+		return []api.ResolumeInstanceView{{InstanceID: id, Observations: oscControlledResolumeObservations(id, time.Now()), ControlledOverOSC: true}}, nil
+	}
+	return resolumeInstanceLister{st: m.st, instanceID: id}.ListInstances(ctx)
 }
 
 // CollectorStatuses implements [api.CollectorStatusLister], delegating to a
 // freshly constructed [resolumeCollectorStatusLister] reflecting whether a
 // bundle is current RIGHT NOW.
 func (m *resolumeManager) CollectorStatuses(ctx context.Context) ([]api.CollectorState, error) {
+	if id, overOSC := m.currentInstance(); id != "" && overOSC {
+		reason := resolumeOSCNotReadReason
+		return []api.CollectorState{{ID: resolumeCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
+	}
 	return resolumeCollectorStatusLister{configured: m.currentInstanceID() != ""}.CollectorStatuses(ctx)
 }
 
 // --- api.ResolumeActionDispatcher ------------------------------------------
 
-func (m *resolumeManager) currentActions() *resolumeActionDispatcherAdapter {
+func (m *resolumeManager) currentActions() api.ResolumeActionDispatcher {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.bundle == nil {
@@ -477,5 +504,5 @@ func (m *resolumeManager) Restore(ctx context.Context, principalName string) (ap
 // api.noResolumeRecoveryProvider once ResolumeRecovery could be wired to a
 // live manager holding zero instances.
 func (m *resolumeManager) Configured() bool {
-	return m.currentInstanceID() != ""
+	return m.currentRecoveryAdapter() != nil
 }
