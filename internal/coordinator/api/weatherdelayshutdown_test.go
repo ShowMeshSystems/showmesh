@@ -143,13 +143,7 @@ func (activeWeatherDelayStore) SetWeatherDelayState(context.Context, store.Weath
 
 func TestWeatherDelayPowerDownPresentationCompletes(t *testing.T) {
 	now := time.Date(2026, 10, 31, 23, 0, 0, 0, time.UTC)
-	off := &config.NightPresentationPowerOff{
-		NightPowerBinding: config.NightPowerBinding{
-			Action: "power-off-action", PowerDomain: config.NightPowerDomainPresentation, DomainProvenance: config.NightDomainProvenanceOperatorDeclared,
-		},
-		RemovalPolicy:            config.NightRemovalPolicyImmediate,
-		ImmediateSafeAttestation: true,
-	}
+	off := nightOnlySequences(config.ShutdownSequence{ID: "power", Label: "Power", Steps: []config.ShutdownStep{powerCut("power-off-action")}})
 	f := newNightPowerOffFixture(t, &now, off, map[string]ResolumeActionResult{
 		"blackout": resolumeConfirmed("power relay confirmed open", now),
 	}, map[string]string{"power-off-action": "blackout"})

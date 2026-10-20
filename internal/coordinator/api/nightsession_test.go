@@ -121,15 +121,15 @@ func TestPutAndGetNightSessionRoundTrips(t *testing.T) {
 	}
 }
 
-// TestPutAndGetNightSessionRoundTripsSiteControlInterlocksAndFadePair
-// proves the response mapping gap this seam closes: siteControl,
+// TestPutAndGetNightSessionRoundTripsSiteActionsInterlocksAndFadePair
+// proves the response mapping gap this seam closes: siteActions,
 // interlocks, and resting.backgroundAudio's fadeOutMs/fadeInMs pair were
 // each fully decoded, validated, and stored by the write path already
 // (config.DecodeNightSessionPayload), but the wire response
 // (mapConfigNightSession/mapConfigNightSessionResting) silently dropped
 // all three, so an operator authoring them through PUT could never see
 // them come back on GET or on the PUT response itself.
-func TestPutAndGetNightSessionRoundTripsSiteControlInterlocksAndFadePair(t *testing.T) {
+func TestPutAndGetNightSessionRoundTripsSiteActionsInterlocksAndFadePair(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	api, st, token := setupNightSessionFixture(t)
 	mustPutShowAction(t, api, token, "cooldown-check", validCooldownCheckActionBody)
@@ -163,14 +163,17 @@ func TestPutAndGetNightSessionRoundTripsSiteControlInterlocksAndFadePair(t *test
 			"blackoutHoldMs": 6000
 		},
 		"enterResting": {"cues": [], "blackoutAfterShowMs": 6000},
-		"siteControl": {
-			"requestThermalProfile": "thermal-profile",
-			"presentationPowerOn": {"action": "power-on", "powerDomain": "presentation", "domainProvenance": "operator-declared"},
-			"presentationPowerOff": {
-				"action": "power-off", "powerDomain": "presentation", "domainProvenance": "operator-declared",
-				"removalPolicy": "after-actions",
-				"prerequisites": [{"kind": "action", "action": "power-off-prep"}]
-			}
+		"siteActions": {
+			"prepareSite": ["thermal-profile"],
+			"powerDown": {
+				"skipSequences": ["fm"],
+				"additionalSequences": [{"id": "projectors", "label": "Projectors", "steps": [
+					{"action": "power-off-prep", "requireConfirmation": true},
+					{"delayMs": 1000},
+					{"action": "power-off", "powerDomain": "presentation", "domainProvenance": "operator-declared"}
+				]}]
+			},
+			"endSession": ["power-on"]
 		},
 		"interlocks": [
 			{"name": "cooldown", "phase": "prepare-site", "posture": "block", "signal": "cooldown-check", "failureText": "The lamp is not cool.", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
@@ -196,11 +199,10 @@ func TestPutAndGetNightSessionRoundTripsSiteControlInterlocksAndFadePair(t *test
 
 	wantSubstrings := []string{
 		`"fadeOutMs":800`, `"fadeInMs":1200`,
-		`"requestThermalProfile":"thermal-profile"`,
-		`"presentationPowerOn":{"action":"power-on"`,
-		`"presentationPowerOff":{"action":"power-off"`,
-		`"removalPolicy":"after-actions"`,
-		`"prerequisites":[{"kind":"action","action":"power-off-prep"}]`,
+		`"prepareSite":["thermal-profile"]`,
+		`"skipSequences":["fm"]`,
+		`{"action":"power-off-prep","requireConfirmation":true},{"delayMs":1000}`,
+		`"endSession":["power-on"]`,
 		`"name":"cooldown"`, `"phase":"prepare-site"`, `"posture":"block"`, `"onUnavailable":"block"`, `"overridePolicy":"authorized-operator"`,
 		`"name":"cooldown-watch"`, `"posture":"observe"`,
 		`"name":"cooldown-off"`, `"posture":"disabled"`,
@@ -213,7 +215,7 @@ func TestPutAndGetNightSessionRoundTripsSiteControlInterlocksAndFadePair(t *test
 		{"GET response", string(getBody)},
 	} {
 		if !containsAllSubstrings(body.json, wantSubstrings...) {
-			t.Fatalf("%s did not round-trip the authored siteControl/interlocks/fade pair; body: %s", body.label, body.json)
+			t.Fatalf("%s did not round-trip the authored siteActions/interlocks/fade pair; body: %s", body.label, body.json)
 		}
 	}
 }
@@ -442,20 +444,15 @@ func TestPutNightSessionRejectsCalendarField(t *testing.T) {
 	}
 }
 
-// TestPutNightSessionRejectsEmptySiteControl: Track F seam F6 now decodes
-// siteControl for real (nightsitecontrol.go); an empty object is still
-// refused, but as ordinary field validation rather than the retired
-// "not implemented" problem.
-func TestPutNightSessionRejectsEmptySiteControl(t *testing.T) {
+// A write still carrying siteControl is refused with what replaced it
+// (ADR-065 decision 11).
+func TestPutNightSessionRefusesSiteControl(t *testing.T) {
 	api, _, token := setupNightSessionFixture(t)
 	body := validNightSessionBody[:len(validNightSessionBody)-1] + `,"siteControl":{}}`
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + token})
 	resp, respBody := doRawRequest(t, api.Handler, req)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, respBody)
-	}
-	if !containsAll(string(respBody), "show-config-field-required") || !containsAll(string(respBody), "siteControl") {
-		t.Fatalf("expected a field-required problem naming siteControl; body: %s", respBody)
+	if resp.StatusCode != http.StatusBadRequest || !containsAll(string(respBody), "replaced by site actions") {
+		t.Fatalf("status = %d body = %s, want 400 naming site actions", resp.StatusCode, respBody)
 	}
 }
 

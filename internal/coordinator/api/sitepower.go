@@ -53,6 +53,26 @@ func (h *handlers) resolveSitePowerConfig(ctx context.Context) (payload config.S
 	return payload, obj, rev, true, nil
 }
 
+// sitePowerSequencesTx reads the saved shutdown sequences inside tx.
+func sitePowerSequencesTx(ctx context.Context, tx *store.Tx) ([]config.ShutdownSequence, error) {
+	obj, err := tx.GetConfigObject(ctx, config.ShowSitePowerConfigKind, config.ShowSitePowerConfigObjectID)
+	if errors.Is(err, store.ErrConfigObjectNotFound) || (err == nil && obj.CurrentRevision == 0) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rev, err := tx.GetConfigRevision(ctx, config.ShowSitePowerConfigKind, config.ShowSitePowerConfigObjectID, obj.CurrentRevision)
+	if err != nil {
+		return nil, err
+	}
+	payload, verr := config.DecodeSitePowerPayload(rev.PayloadJSON, func(string) bool { return true })
+	if verr != nil {
+		return nil, fmt.Errorf("api: decode show.sitepower payload: %s", verr.Error())
+	}
+	return payload.ShutdownSequences, nil
+}
+
 // handleGetSitePowerConfig serves GET /api/v1/config/show.sitepower.
 func (h *handlers) handleGetSitePowerConfig(w http.ResponseWriter, r *http.Request) {
 	now := h.now()

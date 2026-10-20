@@ -124,41 +124,18 @@ type ConfigNightSessionEnterEndOfNight struct {
 	BlackoutAfterShowMs *int                    `json:"blackoutAfterShowMs,omitempty"`
 }
 
-// ConfigNightSessionPowerBinding is a configured power binding under
-// night.session.siteControl (RESTING-MODE.md §10.2, Track F seam F6).
-type ConfigNightSessionPowerBinding struct {
-	Action           string `json:"action"`
-	PowerDomain      string `json:"powerDomain"`
-	DomainProvenance string `json:"domainProvenance"`
+// ConfigNightSessionPowerDown picks which global shutdown sequences a
+// night runs and adds its own (ADR-065).
+type ConfigNightSessionPowerDown struct {
+	SkipSequences       []string                 `json:"skipSequences,omitempty"`
+	AdditionalSequences []ConfigShutdownSequence `json:"additionalSequences,omitempty"`
 }
 
-// ConfigNightSessionPrerequisite is one entry of
-// siteControl.presentationPowerOff.prerequisites.
-type ConfigNightSessionPrerequisite struct {
-	Kind                string `json:"kind"`
-	Action              string `json:"action,omitempty"`
-	RequireConfirmation bool   `json:"requireConfirmation,omitempty"`
-	DelayMs             int    `json:"delayMs,omitempty"`
-}
-
-// ConfigNightSessionPresentationPowerOff is
-// night.session.siteControl.presentationPowerOff.
-type ConfigNightSessionPresentationPowerOff struct {
-	Action                   string                           `json:"action"`
-	PowerDomain              string                           `json:"powerDomain"`
-	DomainProvenance         string                           `json:"domainProvenance"`
-	RemovalPolicy            string                           `json:"removalPolicy"`
-	ImmediateSafeAttestation bool                             `json:"immediateSafeAttestation,omitempty"`
-	Prerequisites            []ConfigNightSessionPrerequisite `json:"prerequisites,omitempty"`
-}
-
-// ConfigNightSessionSiteControl is night.session.siteControl
-// (RESTING-MODE.md §10.2/§10.4, Track F seam F6): entirely optional, and
-// every field within it is independently optional too.
-type ConfigNightSessionSiteControl struct {
-	RequestThermalProfile string                                  `json:"requestThermalProfile,omitempty"`
-	PresentationPowerOn   *ConfigNightSessionPowerBinding         `json:"presentationPowerOn,omitempty"`
-	PresentationPowerOff  *ConfigNightSessionPresentationPowerOff `json:"presentationPowerOff,omitempty"`
+// ConfigNightSessionSiteActions is night.session.siteActions (ADR-065).
+type ConfigNightSessionSiteActions struct {
+	PrepareSite []string                     `json:"prepareSite,omitempty"`
+	PowerDown   *ConfigNightSessionPowerDown `json:"powerDown,omitempty"`
+	EndSession  []string                     `json:"endSession,omitempty"`
 }
 
 // ConfigNightSessionInterlock is one entry of night.session.interlocks
@@ -178,7 +155,7 @@ type ConfigNightSessionInterlock struct {
 
 // ConfigNightSession is the "night.session" configuration kind's decoded
 // payload: the body PUT /config/night.session/{id} accepts and GET
-// returns. SiteControl and Interlocks are Track F seam F6's own optional
+// returns. SiteActions and Interlocks are Track F seam F6's own optional
 // blocks, nil/empty on a deployment that configures neither.
 type ConfigNightSession struct {
 	Show                      string                            `json:"show"`
@@ -189,7 +166,7 @@ type ConfigNightSession struct {
 	EnterResting              ConfigNightSessionEnterResting    `json:"enterResting"`
 	EnterEndOfNight           ConfigNightSessionEnterEndOfNight `json:"enterEndOfNight"`
 	AnnouncementDefaultPolicy string                            `json:"announcementDefaultPolicy"`
-	SiteControl               *ConfigNightSessionSiteControl    `json:"siteControl,omitempty"`
+	SiteActions               *ConfigNightSessionSiteActions    `json:"siteActions,omitempty"`
 	Interlocks                []ConfigNightSessionInterlock     `json:"interlocks,omitempty"`
 	LightsFadeOutMs           *int                              `json:"lightsFadeOutMs,omitempty"`
 	LightsFadeInMs            *int                              `json:"lightsFadeInMs,omitempty"`

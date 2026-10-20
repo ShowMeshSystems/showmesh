@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,245 +13,307 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// Track F seam F6's own removal-policy runtime: once nightReachStopped
-// (nightshutdown.go) records stopped from an OBSERVED idle FPP stop, this
-// drives siteControl.presentationPowerOff's configured removal policy to
-// completion, persisting each step as a night_cue_outbox row (nightcuerun.go)
-// so a restart resumes without repeating or skipping one.
+// The night's site actions (ADR-065): prepare-site actions, the power
+// down that runs shutdown sequences side by side, and end session actions.
+// Every step is a night_cue_outbox row, so a restart resumes a wait or a
+// dispatch instead of repeating or skipping it.
 
-// The night_cue_outbox.phase vocabulary this file adds, alongside
-// nightcuerun.go's own nightPhaseEnterShow/nightPhaseEnterResting/
-// nightPhaseFadeOut: camelCase, matching every existing sibling.
+// The night_cue_outbox.phase values this file writes.
 const (
-	// nightPhasePowerOffPrereq holds one after-actions prerequisite's own
-	// outbox row, named nightPowerOffPrereqName(index).
-	nightPhasePowerOffPrereq = "powerOffPrereq"
-	// nightPhasePowerOffAction holds the one dispatch every removal
-	// policy ends with.
-	nightPhasePowerOffAction = "powerOffAction"
-	// nightPowerOffActionCueName is a cue_name under nightPhasePowerOffAction,
-	// safe from an operator's own cue names because row identity is
-	// (session, cycle, phase, cue_name) and no operator cue ever shares
-	// this phase.
-	nightPowerOffActionCueName = "power-off"
+	nightPhasePrepareSite  = "prepareSite"
+	nightPhaseShutdownStep = "shutdownStep"
+	nightPhaseEndSession   = "endSession"
 )
 
-func nightPowerOffPrereqName(index int) string {
-	return fmt.Sprintf("prereq-%d", index)
+func nightShutdownStepName(scope, seqID string, index int) string {
+	return fmt.Sprintf("%s:%s:%d", scope, seqID, index)
 }
 
-// nightAdvancePowerOff is nightTick's own stopped-state entry point for a
-// power-down whose removal policy has not yet reached a terminal outcome.
-// A no-op once ShutdownIntent is not "power-down" or PowerPhase has
-// already moved past nightPowerPhaseConfiguredNotDispatched.
+func nightSiteActionName(index int) string { return fmt.Sprintf("action-%d", index) }
+
+// nightEndSessionSkippedName marks a night whose end session actions must
+// not run, because a hard stop ended it.
+const nightEndSessionSkippedName = "skipped-by-hard-stop"
+
+// nightSkipEndSessionActions records that rec's end session actions are
+// skipped. A hard stop calls it right after ending the session.
+func (h *handlers) nightSkipEndSessionActions(ctx context.Context, now time.Time, rec store.NightSessionRecord) error {
+	resolvedAt := now
+	err := h.deps.NightSessions.InsertNightCueOutboxRow(ctx, store.NightCueOutboxRecord{
+		ID: uuid.NewString(), SessionID: rec.ID, Cycle: rec.Cycle, Phase: nightPhaseEndSession, CueName: nightEndSessionSkippedName,
+		State: nightCueStateResolved, Outcome: nightCueOutcomeRefused, OutcomeReason: "Hard stop skips end session actions.", ResolvedAt: &resolvedAt,
+	}, now)
+	if errors.Is(err, store.ErrNightCueOutboxDuplicate) {
+		return nil
+	}
+	return err
+}
+
+// nightScopedSequence is a sequence with where it came from, so a global
+// and a night-only sequence with the same id never share outbox rows.
+type nightScopedSequence struct {
+	scope string
+	seq   config.ShutdownSequence
+}
+
+// nightPowerDownSequences returns what this night runs at power down: the
+// global sequences saved now, less the ones it skips, then its own.
+func (h *handlers) nightPowerDownSequences(ctx context.Context, payload config.NightSessionPayload) ([]nightScopedSequence, error) {
+	global, _, _, _, err := h.resolveSitePowerConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []nightScopedSequence
+	skip := []string(nil)
+	var own []config.ShutdownSequence
+	if payload.SiteActions != nil && payload.SiteActions.PowerDown != nil {
+		skip = payload.SiteActions.PowerDown.SkipSequences
+		own = payload.SiteActions.PowerDown.AdditionalSequences
+	}
+	for _, s := range config.SequencesExcept(global.ShutdownSequences, skip) {
+		out = append(out, nightScopedSequence{scope: "global", seq: s})
+	}
+	for _, s := range own {
+		out = append(out, nightScopedSequence{scope: "night", seq: s})
+	}
+	return out, nil
+}
+
+// nightAdvancePowerOff is the stopped-state tick: it advances a pending
+// power down, and once none is pending, the end session actions.
 func (h *handlers) nightAdvancePowerOff(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
 	if rec.ShutdownIntent != "power-down" || rec.PowerPhase != nightPowerPhaseConfiguredNotDispatched {
+		h.nightAdvanceEndSessionActions(ctx, now, rec)
 		return
 	}
 	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
 	if err != nil {
-		h.logWarn("night loop: power-off: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
+		h.logWarn("night loop: power down: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
 		return
 	}
-	if payload.SiteControl == nil || payload.SiteControl.PresentationPowerOff == nil {
-		// Cannot happen for a session already prepared against this
-		// configuration; must not spin forever if it somehow does.
-		h.nightCompletePowerPhase(ctx, now, rec, "Power down was requested, but this night has no power down step. Power was not removed.")
+	seqs, err := h.nightPowerDownSequences(ctx, payload)
+	if err != nil {
+		h.logWarn("night loop: power down: failed to read the shutdown sequences", "sessionId", rec.ID, "error", err)
 		return
 	}
-	off := *payload.SiteControl.PresentationPowerOff
-
-	// Defense in depth alongside decodeNightPresentationPowerOff's own
-	// write-time refusal (nightsitecontrol.go): this is the one path that
-	// can actually remove power, and environmental equipment must never
-	// come down with it (RESTING-MODE.md section 10.2).
-	if off.PowerDomain != config.NightPowerDomainPresentation {
-		h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-			"The power down step controls %s power, so it was refused. Power was not removed.", off.PowerDomain))
+	if len(seqs) == 0 {
+		h.nightCompletePowerPhase(ctx, now, rec, nightShutdownPowerPhaseNotConfigured)
 		return
 	}
-
-	if off.RemovalPolicy == config.NightRemovalPolicyAfterActions {
-		for i, prereq := range off.Prerequisites {
-			satisfied, terminal, reason, err := h.nightPowerOffAdvancePrerequisite(ctx, now, rec, i, prereq)
-			if err != nil {
-				h.logWarn("night loop: power-off: failed to advance a prerequisite", "sessionId", rec.ID, "index", i, "error", err)
-				return
-			}
-			if terminal {
-				h.logWarn("night loop: power-off stopped at a prerequisite", "sessionId", rec.ID, "cycle", rec.Cycle, "index", i, "prerequisite", nightPowerOffPrerequisiteLabel(prereq), "reason", reason)
-				h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
-					"Power down stopped at step %d of %d, so power was not removed. Run the power down action by hand.",
-					i+1, len(off.Prerequisites)))
-				return
-			}
-			if !satisfied {
-				return
-			}
+	allDone := true
+	var stopped []string
+	for _, s := range seqs {
+		done, ok, err := h.nightAdvanceShutdownSequence(ctx, now, rec, s)
+		if err != nil {
+			h.logWarn("night loop: power down: failed to advance a sequence", "sessionId", rec.ID, "sequence", s.seq.ID, "error", err)
+			allDone = false
+			continue
+		}
+		if !done {
+			allDone = false
+		} else if !ok {
+			stopped = append(stopped, s.seq.Label)
 		}
 	}
-
-	h.nightPowerOffDispatchAction(ctx, now, rec, off)
-}
-
-// nightPowerOffPrerequisiteLabel is the operator-facing name for one
-// prerequisite, used only once a sequence has stopped and must say which
-// step stopped it.
-func nightPowerOffPrerequisiteLabel(prereq config.NightPrerequisite) string {
-	switch prereq.Kind {
-	case config.NightPrerequisiteKindDelay:
-		return fmt.Sprintf("a %s delay", time.Duration(prereq.DelayMs)*time.Millisecond)
-	case config.NightPrerequisiteKindEvidence:
-		return fmt.Sprintf("evidence from action %q", prereq.Action)
-	default:
-		return fmt.Sprintf("action %q", prereq.Action)
+	if !allDone {
+		return
 	}
-}
-
-// nightPowerOffAdvancePrerequisite drives one after-actions prerequisite
-// towards completion. satisfied reports whether it is done; terminal
-// reports whether it failed or never confirmed, stopping the sequence.
-func (h *handlers) nightPowerOffAdvancePrerequisite(ctx context.Context, now time.Time, rec store.NightSessionRecord, index int, prereq config.NightPrerequisite) (satisfied, terminal bool, reason string, err error) {
-	if prereq.Kind == config.NightPrerequisiteKindDelay {
-		return h.nightPowerOffAdvanceDelay(ctx, now, rec, index, prereq)
+	if len(stopped) == 0 {
+		h.nightCompletePowerPhase(ctx, now, rec, "Power down finished.")
+		return
 	}
-	return h.nightPowerOffAdvanceActionPrerequisite(ctx, now, rec, index, prereq)
+	h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf("Power down stopped early in %s, so some power may still be on. Check it by hand.", strings.Join(stopped, ", ")))
 }
 
-// nightPowerOffAdvanceDelay times prereq's own delay from a night_cue_outbox
-// row's own DispatchedAt, stamped once on first reaching this step so a
-// restart resumes the same wait rather than restarting it.
-func (h *handlers) nightPowerOffAdvanceDelay(ctx context.Context, now time.Time, rec store.NightSessionRecord, index int, prereq config.NightPrerequisite) (satisfied, terminal bool, reason string, err error) {
-	cueName := nightPowerOffPrereqName(index)
-	row, ferr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhasePowerOffPrereq, cueName)
+// nightAdvanceShutdownSequence advances one sequence by as many steps as
+// are ready. done reports that it finished or stopped; ok that every step
+// succeeded.
+func (h *handlers) nightAdvanceShutdownSequence(ctx context.Context, now time.Time, rec store.NightSessionRecord, s nightScopedSequence) (done, ok bool, err error) {
+	for i, step := range s.seq.Steps {
+		cueName := nightShutdownStepName(s.scope, s.seq.ID, i)
+		var satisfied, terminal bool
+		switch {
+		case step.IsDelay():
+			satisfied, err = h.nightAdvanceDelayStep(ctx, now, rec, cueName, step.DelayMs)
+		case step.PowerDomain != "" && step.PowerDomain != config.NightPowerDomainPresentation:
+			// Never producible through validation; refused here as well so
+			// environmental protection never comes down with show power.
+			h.logWarn("night loop: power down: refused a step that removes non-show power", "sessionId", rec.ID, "sequence", s.seq.ID, "domain", step.PowerDomain)
+			terminal = true
+		default:
+			satisfied, terminal, err = h.nightAdvanceActionStep(ctx, now, rec, nightPhaseShutdownStep, cueName, step.Action, step.RequireConfirmation)
+		}
+		if err != nil {
+			return false, false, err
+		}
+		if terminal {
+			h.logWarn("night loop: power down: a sequence stopped at a step", "sessionId", rec.ID, "sequence", s.seq.ID, "step", i+1)
+			return true, false, nil
+		}
+		if !satisfied {
+			return false, false, nil
+		}
+	}
+	return true, true, nil
+}
+
+// nightAdvanceDelayStep times a wait from its outbox row's DispatchedAt,
+// stamped once, so a restart resumes the same wait.
+func (h *handlers) nightAdvanceDelayStep(ctx context.Context, now time.Time, rec store.NightSessionRecord, cueName string, delayMs int) (bool, error) {
+	row, ferr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseShutdownStep, cueName)
 	if errors.Is(ferr, store.ErrNightCueOutboxNotFound) {
 		startedAt := now
-		newRow := store.NightCueOutboxRecord{
-			ID: uuid.NewString(), SessionID: rec.ID, Cycle: rec.Cycle, Phase: nightPhasePowerOffPrereq, CueName: cueName,
+		row = store.NightCueOutboxRecord{
+			ID: uuid.NewString(), SessionID: rec.ID, Cycle: rec.Cycle, Phase: nightPhaseShutdownStep, CueName: cueName,
 			State: nightCueStateDispatched, DispatchedAt: &startedAt,
 		}
-		if ierr := h.deps.NightSessions.InsertNightCueOutboxRow(ctx, newRow, now); ierr != nil {
+		if ierr := h.deps.NightSessions.InsertNightCueOutboxRow(ctx, row, now); ierr != nil {
 			if !errors.Is(ierr, store.ErrNightCueOutboxDuplicate) {
-				return false, false, "", ierr
+				return false, ierr
 			}
-			row, ferr = h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhasePowerOffPrereq, cueName)
-			if ferr != nil {
-				return false, false, "", ferr
+			if row, ferr = h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseShutdownStep, cueName); ferr != nil {
+				return false, ferr
 			}
-		} else {
-			row = newRow
 		}
 	} else if ferr != nil {
-		return false, false, "", ferr
+		return false, ferr
 	}
-
 	if row.State == nightCueStateResolved {
-		return true, false, "", nil
+		return true, nil
 	}
-	delay := time.Duration(prereq.DelayMs) * time.Millisecond
-	if row.DispatchedAt == nil || now.Sub(*row.DispatchedAt) < delay {
-		return false, false, "", nil
+	if row.DispatchedAt == nil || now.Sub(*row.DispatchedAt) < time.Duration(delayMs)*time.Millisecond {
+		return false, nil
 	}
 	row.State = nightCueStateResolved
 	row.Outcome = nightCueOutcomeConfirmed
 	row.OutcomeReason = "The wait finished."
 	resolvedAt := now
 	row.ResolvedAt = &resolvedAt
-	if uerr := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); uerr != nil {
-		return false, false, "", uerr
-	}
-	return true, false, "", nil
+	return true, h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row)
 }
 
-// nightPowerOffAdvanceActionPrerequisite drives an "action" or "evidence"
-// prerequisite through nightRunCue, the same dispatch/confirm/resume
-// machinery cues already use - an action's own adapter-reported outcome
-// is the one confirmation evidence this coordinator has. "evidence" has
-// no requireConfirmation of its own (refused at write time) because that
-// is the kind's whole point, so it is treated as requireConfirmation true.
-func (h *handlers) nightPowerOffAdvanceActionPrerequisite(ctx context.Context, now time.Time, rec store.NightSessionRecord, index int, prereq config.NightPrerequisite) (satisfied, terminal bool, reason string, err error) {
-	cueName := nightPowerOffPrereqName(index)
-	cue := config.NightSessionCue{Name: cueName, Action: prereq.Action}
-	issuer := nightControllerIssuer(rec)
+// nightAdvanceActionStep dispatches one action through nightRunCue and
+// reports whether it is done and whether it ended its list. An action
+// deleted since the config was saved ends the list instead of retrying.
+func (h *handlers) nightAdvanceActionStep(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName, actionID string, requireConfirm bool) (satisfied, terminal bool, err error) {
+	if _, gerr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName); errors.Is(gerr, store.ErrNightCueOutboxNotFound) {
+		if _, oerr := h.deps.Config.GetConfigObject(ctx, config.ShowActionConfigKind, actionID); errors.Is(oerr, store.ErrConfigObjectNotFound) {
+			return false, true, nil
+		}
+	}
 	if nightAttributionMissing(rec) {
 		h.nightMarkAttributionDegraded(ctx, now, rec)
 	}
-	row, rerr := h.nightRunCue(ctx, now, rec, nightPhasePowerOffPrereq, cue, issuer, false)
+	row, rerr := h.nightRunCue(ctx, now, rec, phase, config.NightSessionCue{Name: cueName, Action: actionID}, nightControllerIssuer(rec), false)
 	if rerr != nil {
-		return false, false, "", rerr
+		return false, false, rerr
 	}
 	switch row.State {
 	case nightCueStatePending, nightCueStateDispatched:
-		// Stated, not accidental: an audio target's own await-result
-		// error (nightDispatchCueAudio's "resolved: false") retries here
-		// under the same idempotency key with no cap, so this can wait
-		// indefinitely rather than guess; power stays on meanwhile.
-		return false, false, "", nil
+		return false, false, nil
 	case nightCueStateAmbiguous:
-		return false, true, row.OutcomeReason, nil
+		return false, true, nil
 	case nightCueStateResolved:
-		requireConfirm := prereq.Kind == config.NightPrerequisiteKindEvidence || prereq.RequireConfirmation
 		switch row.Outcome {
 		case nightCueOutcomeConfirmed:
-			return true, false, "", nil
+			return true, false, nil
 		case nightCueOutcomeFailed, nightCueOutcomeRefused:
-			return false, true, row.OutcomeReason, nil
-		default: // unconfirmed, unconfirmable: acceptable only when confirmation was never required.
+			return false, true, nil
+		default:
 			if requireConfirm {
-				return false, true, row.OutcomeReason, nil
+				return false, true, nil
 			}
-			return true, false, "", nil
+			return true, false, nil
 		}
 	default:
-		return false, false, "", fmt.Errorf("api: power-off prerequisite outbox row %s/%d/%s has unrecognized state %q", rec.ID, rec.Cycle, cueName, row.State)
+		return false, false, fmt.Errorf("api: site action outbox row %s/%d/%s has unrecognized state %q", rec.ID, rec.Cycle, cueName, row.State)
 	}
 }
 
-// nightPowerOffDispatchAction is the one dispatch every removal policy
-// ends with, reached directly for "immediate" and only once every
-// prerequisite is satisfied for "after-actions".
-func (h *handlers) nightPowerOffDispatchAction(ctx context.Context, now time.Time, rec store.NightSessionRecord, off config.NightPresentationPowerOff) {
-	cue := config.NightSessionCue{Name: nightPowerOffActionCueName, Action: off.Action}
-	issuer := nightControllerIssuer(rec)
-	if nightAttributionMissing(rec) {
-		h.nightMarkAttributionDegraded(ctx, now, rec)
-	}
-	row, err := h.nightRunCue(ctx, now, rec, nightPhasePowerOffAction, cue, issuer, false)
-	if err != nil {
-		h.logWarn("night loop: power-off: failed to dispatch the power down action", "sessionId", rec.ID, "error", err)
-		return
-	}
-	switch row.State {
-	case nightCueStatePending, nightCueStateDispatched:
-		// Same stated property as nightPowerOffAdvanceActionPrerequisite's
-		// own identical case: no bound here, waits rather than guesses.
-		return
-	case nightCueStateAmbiguous:
-		h.logWarn("night loop: power-off: the action's result is unclear", "sessionId", rec.ID, "cycle", rec.Cycle, "action", off.Action, "reason", row.OutcomeReason)
-		h.nightCompletePowerPhase(ctx, now, rec,
-			"The power down result is unclear. Check the power by hand, and run the power down action if it is still on.")
-	case nightCueStateResolved:
-		switch row.Outcome {
-		case nightCueOutcomeFailed, nightCueOutcomeRefused:
-			h.logWarn("night loop: power-off: the action failed or was refused", "sessionId", rec.ID, "cycle", rec.Cycle, "action", off.Action, "outcome", row.Outcome, "reason", row.OutcomeReason)
-			h.nightCompletePowerPhase(ctx, now, rec,
-				"The power down action was not sent, so power was not removed. Run the power down action by hand.")
-		case nightCueOutcomeConfirmed:
-			h.nightCompletePowerPhase(ctx, now, rec, "Power down was sent and confirmed.")
-		default:
-			h.logWarn("night loop: power-off: the action was not confirmed", "sessionId", rec.ID, "cycle", rec.Cycle, "action", off.Action, "outcome", row.Outcome, "reason", row.OutcomeReason)
-			h.nightCompletePowerPhase(ctx, now, rec, "Power down was sent but not confirmed. Check the power by hand.")
-		}
-	}
-}
-
-// nightCompletePowerPhase persists rec's terminal power-off outcome via
-// nightCommit's own re-check pattern. It never sets Degraded, so a
-// stopped sequence never also blocks this session's other stopped-state
-// work (the background-audio end-session clear retry).
+// nightCompletePowerPhase records rec's power down outcome. It never sets
+// Degraded, so a stopped sequence never blocks the session's other
+// stopped-state work.
 func (h *handlers) nightCompletePowerPhase(ctx context.Context, now time.Time, rec store.NightSessionRecord, reason string) {
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 		cur.PowerPhase = reason
 		return cur
 	})
 }
+
+// nightEndSessionActionsDue reports whether a stopped night should run its
+// end session actions now: after its power down finished, or when it was
+// ended without one. A night that only faded out waits for its power down.
+func nightEndSessionActionsDue(rec store.NightSessionRecord) bool {
+	if rec.State != nightStateStopped {
+		return false
+	}
+	switch rec.ShutdownIntent {
+	case "power-down":
+		return rec.PowerPhase != "" && rec.PowerPhase != nightPowerPhaseConfiguredNotDispatched
+	case "":
+		return true
+	default:
+		return false
+	}
+}
+
+// nightAdvanceEndSessionActions runs the end session actions in order, one
+// outbox row each. A failed action is passed over, never retried.
+func (h *handlers) nightAdvanceEndSessionActions(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	if !nightEndSessionActionsDue(rec) {
+		return
+	}
+	if _, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEndSession, nightEndSessionSkippedName); err == nil {
+		return
+	}
+	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
+	if err != nil || payload.SiteActions == nil {
+		return
+	}
+	for i, id := range payload.SiteActions.EndSession {
+		satisfied, terminal, err := h.nightAdvanceActionStep(ctx, now, rec, nightPhaseEndSession, nightSiteActionName(i), id, false)
+		if err != nil {
+			h.logWarn("night loop: end session action failed to dispatch", "sessionId", rec.ID, "action", id, "error", err)
+			return
+		}
+		if !satisfied && !terminal {
+			return
+		}
+	}
+}
+
+// nightRunPrepareSiteActions sends a new preparation's prepare-site actions
+// in order, in the background. The outbox row per action is what keeps a
+// repeated or retried prepare-site from sending one twice.
+func (h *handlers) nightRunPrepareSiteActions(ctx context.Context, rec store.NightSessionRecord, payload config.NightSessionPayload) {
+	if payload.SiteActions == nil || len(payload.SiteActions.PrepareSite) == 0 {
+		return
+	}
+	actions := append([]string(nil), payload.SiteActions.PrepareSite...)
+	h.sitePowerRuns.Add(1)
+	go func() {
+		defer h.sitePowerRuns.Done()
+		bg := context.WithoutCancel(ctx)
+		for i, id := range actions {
+			name := nightSiteActionName(i)
+			for attempt := 0; attempt < nightPrepareSiteActionMaxPolls; attempt++ {
+				satisfied, terminal, err := h.nightAdvanceActionStep(bg, h.now(), rec, nightPhasePrepareSite, name, id, false)
+				if err != nil {
+					h.logWarn("prepare-site: action failed to dispatch", "sessionId", rec.ID, "action", id, "error", err)
+					break
+				}
+				if satisfied || terminal {
+					break
+				}
+				time.Sleep(nightPrepareSiteActionPoll)
+			}
+		}
+	}()
+}
+
+// A prepare-site action that has not resolved after this long is left
+// pending; its outbox row shows where it stopped.
+const (
+	nightPrepareSiteActionPoll     = 250 * time.Millisecond
+	nightPrepareSiteActionMaxPolls = 600
+)

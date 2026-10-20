@@ -657,6 +657,11 @@ func (h *handlers) nightEmergencyEndSession(ctx context.Context, now time.Time, 
 		return v1.EmergencyStopNightSessionOutcome{Present: false}
 	}
 
+	// Marked before the session ends, so the night loop never sees a
+	// stopped night it could run end session actions for.
+	if err := h.nightSkipEndSessionActions(ctx, now, current); err != nil {
+		h.logWarn("emergency stop: could not mark end session actions as skipped", "sessionId", current.ID, "error", err)
+	}
 	var attributionDegraded bool
 	out, problem, err := h.nightRunExempt(ctx, now, nightCommandEndSession, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 		return h.nightEndSessionDecide(now, cur), nil, nil

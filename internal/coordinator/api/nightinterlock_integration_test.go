@@ -258,7 +258,7 @@ func TestInterlockOverrideOfWrongRuleNameDoesNotHelp(t *testing.T) {
 	}
 }
 
-// --- power domain: siteControl.presentationPowerOff configured reports
+// --- power domain: a configured shutdown sequence reports
 // honestly, never as "not_configured" ---
 
 const validSitePowerOffActionBody = `{
@@ -291,14 +291,10 @@ func nightSessionBodyWithPresentationPowerOff() string {
 			"blackoutHoldMs": 6000
 		},
 		"enterResting": {"cues": [], "blackoutAfterShowMs": 6000},
-		"siteControl": {
-			"presentationPowerOff": {
-				"action": "site-power-off",
-				"powerDomain": "presentation",
-				"domainProvenance": "operator-declared",
-				"removalPolicy": "immediate",
-				"immediateSafeAttestation": true
-			}
+		"siteActions": {
+			"powerDown": {"additionalSequences": [{"id": "site", "label": "Site", "steps": [
+				{"action": "site-power-off", "powerDomain": "presentation", "domainProvenance": "operator-declared"}
+			]}]}
 		}
 	}`
 }
@@ -565,5 +561,47 @@ func TestFadeOutNightOverrideIsAudited(t *testing.T) {
 		if !strings.Contains(*found, want) {
 			t.Fatalf("fade-out-night audit entry params = %q, want it to contain %q (RESTING-MODE.md §10.1: rule, phase, reason, bounded scope)", *found, want)
 		}
+	}
+}
+
+// Prepare-site actions go out once for a new preparation, and a repeated
+// prepare-site on the open night sends nothing again (ADR-065 decision 4).
+func TestPrepareSiteActionsRunOncePerPreparation(t *testing.T) {
+	clock := fixedClock(testNow)
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	opToken := mustIssueToken(t, svc, operator.ID)
+
+	deps, _ := nightControlTestDeps(svc, st)
+	deps.FPP = nightWireFPPForReadiness(t)
+	deps.AssetBackend = nightTestAssetBackend(t)
+	api := New(deps, Options{Clock: clock, Logger: testLogger(), NightReadinessMaxAge: time.Hour})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustPutShowAction(t, api, adminToken, "show-preheat", validSitePowerOffActionBody)
+	mustCreateNightSessionFSEQAsset(t, st, deps.AssetBackend, "halloween-2026", "resting-loop", "player-01")
+	body := strings.Replace(nightSessionBodyWithPresentationPowerOff(), `"siteActions": {`, `"siteActions": {"prepareSite": ["show-preheat"],`, 1)
+	mustPutShowAction(t, api, adminToken, "site-power-off", validSitePowerOffActionBody)
+	mustPutNightSession(t, api, adminToken, "halloween-main", body)
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+
+	mustNightCommand(t, api, opToken, "prepare-site")
+	api.h.sitePowerRuns.Wait()
+	first := mustGetCurrentSession(t, st)
+	row, err := st.GetNightCueOutboxRow(context.Background(), first.ID, first.Cycle, nightPhasePrepareSite, nightSiteActionName(0))
+	if err != nil {
+		t.Fatalf("prepare-site action row: %v", err)
+	}
+	if row.State != nightCueStateResolved {
+		t.Fatalf("prepare-site action row state = %q, want resolved", row.State)
+	}
+
+	mustNightCommand(t, api, opToken, "prepare-site")
+	api.h.sitePowerRuns.Wait()
+	if again := mustGetCurrentSession(t, st); again.ID != first.ID {
+		t.Fatalf("a repeated prepare-site opened a new preparation %s, want %s kept", again.ID, first.ID)
 	}
 }
