@@ -289,7 +289,11 @@ func (d *ActionDispatcher) FadeLayerStart(ctx context.Context, layerID ObjectID)
 
 // Actions returns [actionRegistry]'s entries, sorted by Name so a discovery
 // endpoint built from them does not depend on Go's slice-literal order.
-func (d *ActionDispatcher) Actions() []ActionDescriptor {
+func (d *ActionDispatcher) Actions() []ActionDescriptor { return ActionDescriptors() }
+
+// ActionDescriptors is the action registry sorted by name, for a dispatcher
+// that does not go through REST.
+func ActionDescriptors() []ActionDescriptor {
 	out := make([]ActionDescriptor, len(actionRegistry))
 	copy(out, actionRegistry)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

@@ -567,6 +567,7 @@ func cmdResolumeFadeLayer(args []string, stdout, stderr io.Writer, clock func() 
 	const cmdLabel = "resolume action fade-layer"
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
 	durationMs := fs.Int64("duration-ms", 0, "fade time in milliseconds; 0 sets the level at once")
+	fromPercent := fs.Float64("from-percent", -1, "with OSC control, the level to fade from when ShowMesh has not yet set this layer")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s <layer name> <target percent> [flags]\n\n"+
 			"Fade a layer's master to a percent over --duration-ms, sent over OSC.\n"+
@@ -594,6 +595,12 @@ func cmdResolumeFadeLayer(args []string, stdout, stderr io.Writer, clock func() 
 	if *durationMs < 0 {
 		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "--duration-ms must be zero or more"))
 	}
-	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "fadeLayer",
-		map[string]any{"layer": rest[0], "targetPercent": target, "durationMs": *durationMs})
+	params := map[string]any{"layer": rest[0], "targetPercent": target, "durationMs": *durationMs}
+	if *fromPercent != -1 {
+		if *fromPercent < 0 || *fromPercent > 100 {
+			return reportError(stderr, cmdLabel, newCLIError(exitUsage, "--from-percent must be a number from 0 to 100"))
+		}
+		params["fromPercent"] = *fromPercent
+	}
+	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "fadeLayer", params)
 }

@@ -410,6 +410,24 @@ describe('Settings › Connections', () => {
     expect(screen.getByText(/One row per player/)).toBeInTheDocument()
   })
 
+  it('saves the Resolume control setting and keeps the OSC port', async () => {
+    stubs.getFPPEndpointsConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getResolumeInstancesConfig = () =>
+      Promise.resolve({ serverTime: '2026-10-20T06:00:00Z', kind: 'resolume.instances', revision: 1, payload: { instances: [{ id: 'arena-main', url: 'http://10.20.0.7:8080', oscPort: 7001, control: 'rest' }] }, updatedAt: '2026-10-20T06:00:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'admin', source: 'api', restartRequired: false, restartRequiredReason: '' })
+    const putResolumeInstancesConfig = vi.fn(() => Promise.resolve({ revision: 2 }))
+    stubs.putResolumeInstancesConfig = putResolumeInstancesConfig
+
+    renderAt('/settings/connections')
+
+    const control = await screen.findByLabelText('Control')
+    await waitFor(() => expect(control).toHaveValue('rest'))
+    fireEvent.change(control, { target: { value: 'osc' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save connections' }))
+
+    await waitFor(() => expect(putResolumeInstancesConfig).toHaveBeenCalledWith({ instances: [{ id: 'arena-main', url: 'http://10.20.0.7:8080', oscPort: 7001, control: 'osc' }] }))
+  })
+
   it('removing a host entry sends the map without it', async () => {
     stubs.getFPPEndpointsConfig = () => notConfigured('nothing has ever been configured')
     stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')

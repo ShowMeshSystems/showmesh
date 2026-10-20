@@ -4349,6 +4349,11 @@ export interface components {
             observations: components["schemas"]["Evidence"][];
             composition: components["schemas"]["ResolumeInstanceComposition"] | null;
             showParticipation: components["schemas"]["InstanceShowParticipation"];
+            /**
+             * @description How ShowMesh controls this Arena. When osc, ShowMesh does not read Arena at all: every observation is not_collected, saying so, and health is unknown.
+             * @enum {string}
+             */
+            control?: "rest" | "osc";
         };
         ResolumeInstancesResponse: {
             /** Format: date-time */
@@ -5427,8 +5432,13 @@ export interface components {
         ConfigResolumeInstance: {
             id: string;
             url: string;
-            /** @description Arena's OSC input port on the url's host, used by fadeLayer (ADR-064). Absent means 7000, Arena's default. */
+            /** @description Arena's OSC input port on the url's host, used by fadeLayer (ADR-064) and by every action when control is osc. Absent means 7000, Arena's default. */
             oscPort?: number;
+            /**
+             * @description How ShowMesh controls this Arena (ADR-065). rest, the default when absent, reads and commands Arena over its web server. osc sends every action over OSC and never contacts Arena's web server, so nothing about Arena is observed or confirmed and automatic recovery does not run. GET always reports the value.
+             * @enum {string}
+             */
+            control?: "rest" | "osc";
         };
         /**
          * @description The "resolume.instances" configuration kind's payload: the body PUT /config/resolume.instances accepts, and the "payload" member of GET /config/resolume.instances' response. instances is never null - an empty configured-instances list is a real, valid state, and it is the only way to deliberately configure zero instances; an absent or null "instances" key on a PUT is a `400`, never a silent wipe. At most one instance is accepted today (enforced by validation, not by this schema - see `PUT /config/resolume.instances`'s own description).
@@ -5943,6 +5953,8 @@ export interface components {
                 layer: string;
                 /** @description The master level to fade to, in percent. */
                 targetPercent: number;
+                /** @description The level to fade from when Arena is controlled over OSC and ShowMesh has not yet sent this layer a level. Ignored over REST, which reads the live level. */
+                fromPercent?: number;
                 /** @description How long the fade takes. Absent or 0 sets the level at once. */
                 durationMs?: number;
             };

@@ -281,7 +281,8 @@
         "state": "not_configured",
         "show": "",
         "reason": "The coordinator cannot tell which FPP instances take part in the show."
-      }
+      },
+      "control": "rest"
     }
   ],
   "auditStore": {

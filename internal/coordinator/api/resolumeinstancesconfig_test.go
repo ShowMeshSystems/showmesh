@@ -482,3 +482,45 @@ func TestPutResolumeInstancesConfigRevisionPreconditionWiring(t *testing.T) {
 		t.Errorf("the refused write's port (8082) must never have been persisted; body: %s", getBody)
 	}
 }
+
+func TestPutResolumeInstancesConfigControlRoundTripsAndRestStoresUnchanged(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	put := func(body string) (int, string) {
+		resp, out := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPut, "/api/v1/config/resolume.instances", body, auth))
+		return resp.StatusCode, string(out)
+	}
+	storedPayload := func() string {
+		obj, err := st.GetConfigObject(context.Background(), "resolume.instances", "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rev, err := st.GetConfigRevision(context.Background(), "resolume.instances", "default", obj.CurrentRevision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rev.PayloadJSON
+	}
+
+	if code, body := put(`{"instances":[{"id":"arena-1","url":"http://10.0.1.30:8080","control":"osc"}]}`); code != http.StatusOK || !strings.Contains(body, `"control":"osc"`) {
+		t.Fatalf("PUT control osc = %d %s, want 200 echoing control osc", code, body)
+	}
+	if got := storedPayload(); !strings.Contains(got, `"Control":"osc"`) {
+		t.Fatalf("stored payload = %s, want Control osc", got)
+	}
+
+	if code, body := put(`{"instances":[{"id":"arena-1","url":"http://10.0.1.30:8080","control":"rest"}]}`); code != http.StatusOK || !strings.Contains(body, `"control":"rest"`) {
+		t.Fatalf("PUT control rest = %d %s, want 200 reporting control rest", code, body)
+	}
+	if got := storedPayload(); got != `{"instances":[{"ID":"arena-1","URL":"http://10.0.1.30:8080"}]}` {
+		t.Fatalf("stored payload for rest = %s, want the same payload control absent stores", got)
+	}
+
+	if code, body := put(`{"instances":[{"id":"arena-1","url":"http://10.0.1.30:8080","control":"udp"}]}`); code != http.StatusBadRequest || !strings.Contains(body, "Use rest or osc.") {
+		t.Fatalf("PUT control udp = %d %s, want 400 naming rest and osc", code, body)
+	}
+}

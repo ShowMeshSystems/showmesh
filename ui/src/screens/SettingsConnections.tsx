@@ -22,7 +22,7 @@ import {
   type FPPBrightnessExcludedRangesResponse,
   type FPPPairingStateResponse,
 } from '../api'
-import { AbsenceLabel, Button, ButtonRow, Choice, DefinitionStrip, Drawer, Field, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
+import { AbsenceLabel, Button, ButtonRow, Choice, DefinitionStrip, Drawer, Field, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Select, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -393,7 +393,7 @@ export function SettingsConnections() {
               {instances.map((instance, index) => {
                 const health = resolumeHealthFor(model.resolume, instance.id)
                 const loadedRow = resolumeLoad.kind === 'loaded' ? resolumeLoad.response.payload.instances[index] : undefined
-                const rowDirty = loadedRow === undefined || loadedRow.id !== instance.id || loadedRow.url !== instance.url || loadedRow.oscPort !== instance.oscPort
+                const rowDirty = loadedRow === undefined || loadedRow.id !== instance.id || loadedRow.url !== instance.url || loadedRow.oscPort !== instance.oscPort || (loadedRow.control ?? 'rest') !== (instance.control ?? 'rest')
                 return (
                   <div key={index} className="sm-panel">
                     <div className="sm-inline-row sm-inline-row--end">
@@ -430,13 +430,28 @@ export function SettingsConnections() {
                             placeholder="7000"
                             value={instance.oscPort ?? ''}
                             onChange={(e) => {
-                              const next: ConfigResolumeInstance = { id: instance.id, url: instance.url }
+                              const next: ConfigResolumeInstance = { ...instance }
+                              delete next.oscPort
                               if (e.target.value !== '') next.oscPort = Number(e.target.value)
                               setInstances(instances.map((row, i) => (i === index ? next : row)))
                               setInstancesDirty(true)
                             }}
                             className="sm-input--narrow"
                           />
+                        )}
+                      </Field>
+                      <Field label="Control" help="OSC only sends Arena commands and never reads it, so nothing is confirmed.">
+                        {(props) => (
+                          <Select {...props}
+                            value={instance.control ?? 'rest'}
+                            onChange={(e) => {
+                              setInstances(patchRow(instances, index, { control: e.target.value === 'osc' ? 'osc' : 'rest' }))
+                              setInstancesDirty(true)
+                            }}
+                          >
+                            <option value="rest">REST and OSC</option>
+                            <option value="osc">OSC only</option>
+                          </Select>
                         )}
                       </Field>
                       <NotWired>
@@ -458,7 +473,11 @@ export function SettingsConnections() {
                         Still polling the saved value <span className="sm-data">{loadedRow.url}</span> until you save.
                       </p>
                     )}
-                    {health !== null ? (
+                    {health !== null && health.control === 'osc' ? (
+                      <p className="sm-small sm-muted">
+                        {health.observations.find((o) => o.signal === 'resolume.reachable')?.reason ?? health.health}
+                      </p>
+                    ) : health !== null ? (
                       <p className="sm-small sm-muted">
                         <StatusPair tone={HEALTH_TONE[health.health] ?? 'unknown'} label={health.health} />
                       </p>
