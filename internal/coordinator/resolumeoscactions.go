@@ -29,7 +29,7 @@ func (d *resolumeOSCActionDispatcher) Actions() []api.ResolumeActionDescriptor {
 	return translateResolumeActionDescriptors(resolume.ActionDescriptors())
 }
 
-const resolumeOSCSentReason = "Sent to Resolume over OSC. Resolume does not answer OSC, so it cannot be confirmed."
+const resolumeOSCSentReason = "Sent to Resolume over OSC. Resolume does not answer OSC, so ShowMesh cannot check it. Check Arena on its own screen."
 
 func (d *resolumeOSCActionDispatcher) Dispatch(_ context.Context, action string, params map[string]any, _ time.Time) (api.ResolumeActionResult, error) {
 	name, ok := resolumeActionNameFromWire(action)

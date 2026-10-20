@@ -1876,7 +1876,7 @@ export interface paths {
         put?: never;
         /**
          * Manually run the crash-recovery restore (Track D seam D-3a)
-         * @description Requires `resolume:action`. Runs the same restore the automatic gate runs, without the crash-return gate's own settle wait or identity-freshness check - an operator invoking this on demand is not resolving a specific crash-return race. Always attempts, regardless of the auto-restore toggle. Each eligible layer's own restore is an ordinary `launchClip` dispatch and inherits every D-3 guard (the identity gate, the deck refusal, confirmation).
+         * @description Requires `resolume:action`. Runs the same restore the automatic gate runs, without the crash-return gate's own settle wait or identity-freshness check - an operator invoking this on demand is not resolving a specific crash-return race. Always attempts, regardless of the auto-restore toggle. Each eligible layer's own restore is an ordinary `launchClip` dispatch and inherits every D-3 guard (the identity gate, the deck refusal, confirmation). Refused with `409` when the Resolume instance is controlled over OSC (ADR-065), since nothing can be read back to restore from.
          */
         post: operations["restoreResolumeRecovery"];
         delete?: never;
@@ -13081,6 +13081,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

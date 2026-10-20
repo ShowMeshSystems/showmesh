@@ -71,7 +71,12 @@ or with no control setting, behaves exactly as before.
 - A layer, clip, column or deck reordered in Arena without re-uploading the
   composition reaches the wrong target, with no composition check to catch it.
 - After an Arena crash nothing is restored automatically; the operator
-  relaunches by hand or replays the show actions.
+  relaunches by hand or replays the show actions. A manual restore request
+  is refused with a plain reason.
+- An emergency stop or weather delay sends its blackout over OSC and reports
+  the Resolume part as sent but unchecked. While a weather delay is active,
+  an OSC instance does not hold its power group back from reading dark,
+  because ShowMesh can never read it.
 - Persistent clips cannot be launched in this mode.
 - Only clip launch and deck select are confirmed on a real Arena (bench
   section 6.4). Column connect, layer clear, layer bypassed, layer master,

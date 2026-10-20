@@ -5646,6 +5646,8 @@ paths:
         regardless of the auto-restore toggle. Each eligible layer's own
         restore is an ordinary `launchClip` dispatch and inherits every
         D-3 guard (the identity gate, the deck refusal, confirmation).
+        Refused with `409` when the Resolume instance is controlled over
+        OSC (ADR-065), since nothing can be read back to restore from.
       responses:
         "200":
           description: OK
@@ -5662,6 +5664,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /resolume/instances:
