@@ -117,6 +117,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `fppconnect.settings` | `default` singleton | shipped | Track E phase 2 seam FC1a |
 | `node.clock` | operator-chosen (the node id) | reserved | Track I seam I1 |
 | `show.emergencystop` | `default` singleton | shipped | Lane 17a SM-129 |
+| `show.sitepower` | `default` singleton | reserved | ADR-065: global shutdown sequences and the power-on action list |
 | `show.weatherdelay` | `default` singleton | shipped | ADR-053 weather delay: the alert assets and repeat count, the target nodes, the operator-defined power groups and their optional heartbeat, the trigger sources and their answer windows. Every field optional |
 | `media.playlist` | operator-chosen | shipped | SM-524 / SM-457 |
 | `release.settings` | `default` singleton | shipped | the newest-release check: enabled and interval |
@@ -654,6 +655,8 @@ register entry comes from the code and never from a plan.
 | `show.emergencystop.stop` | shipped | Lane 17a SM-129: level 1 (stop) dispatch |
 | `show.emergencystop.stop_power_down` | shipped | Lane 17a SM-129: level 2 (stop-power-down) dispatch |
 | `show.emergencystop.hard_stop` | shipped | Lane 17a SM-129: level 3 (hard-stop) dispatch, only after fire consumes its own arm token |
+| `show.sitepower.on` | reserved | ADR-065: System power on ran the power-on actions |
+| `show.sitepower.off` | reserved | ADR-065: System power off ran every shutdown sequence |
 | `show.weatherdelay.start` | shipped | ADR-053 weather delay: a weather delay started, by an operator or by a trigger |
 | `show.weatherdelay.cancel_night` | shipped | ADR-053 weather delay: a cancel night started, or a delay changed into one |
 | `show.weatherdelay.resume` | shipped | ADR-053 weather delay: a delay resumed or a cancel night cleared |
