@@ -31,7 +31,7 @@ version_at_least() {
 
 coord_install_docker() {
   step "Installing Docker from Debian's own packages"
-  apt_install ca-certificates curl jq iproute2 docker.io docker-cli docker-compose avahi-daemon
+  apt_install ca-certificates curl jq iproute2 rsync docker.io docker-cli docker-compose avahi-daemon
   local log start_log
   log="$(run_tmp)"
   start_log="$(run_tmp)"
