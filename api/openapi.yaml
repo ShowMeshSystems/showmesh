@@ -5647,7 +5647,7 @@ paths:
         restore is an ordinary `launchClip` dispatch and inherits every
         D-3 guard (the identity gate, the deck refusal, confirmation).
         Refused with `409` when the Resolume instance is controlled over
-        OSC (ADR-065), since nothing can be read back to restore from.
+        OSC (ADR-066), since nothing can be read back to restore from.
       responses:
         "200":
           description: OK
@@ -15536,7 +15536,7 @@ components:
           type: string
           enum: [rest, osc]
           description: >-
-            How ShowMesh controls this Arena (ADR-065). rest, the default
+            How ShowMesh controls this Arena (ADR-066). rest, the default
             when absent, reads and commands Arena over its web server. osc
             sends every action over OSC and never contacts Arena's web
             server, so nothing about Arena is observed or confirmed and

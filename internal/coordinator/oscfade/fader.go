@@ -1,7 +1,7 @@
 // Package oscfade is ADR-064's Resolume layer fade: Arena's OSC input is
 // positional, write-only and silent (RES-001), so a fade is a ramp of float32
 // messages to /composition/layers/<n>/master that is never confirmed. It also
-// sends every other action for an instance controlled over OSC only (ADR-065).
+// sends every other action for an instance controlled over OSC only (ADR-066).
 package oscfade
 
 import (

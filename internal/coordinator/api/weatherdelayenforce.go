@@ -431,7 +431,7 @@ func (h *handlers) weatherDelayResolumeMemberDark(ctx context.Context, now time.
 }
 
 // weatherDelayOSCResolumeMemberDark never holds a group back once the delay
-// has sent its blackout, because Resolume over OSC can never be read (ADR-065).
+// has sent its blackout, because Resolume over OSC can never be read (ADR-066).
 func (h *handlers) weatherDelayOSCResolumeMemberDark(ctx context.Context, instanceID string) (bool, string) {
 	rec, err := h.deps.WeatherDelay.GetWeatherDelayState(ctx)
 	if err != nil || !rec.Active {

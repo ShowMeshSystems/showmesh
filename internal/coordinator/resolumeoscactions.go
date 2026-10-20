@@ -11,7 +11,7 @@ import (
 )
 
 // resolumeOSCActionDispatcher sends every Resolume action over OSC for an
-// instance set to OSC control (ADR-065). It never contacts Arena's web
+// instance set to OSC control (ADR-066). It never contacts Arena's web
 // server: positions come from the uploaded composition, and nothing is read back.
 type resolumeOSCActionDispatcher struct {
 	compositions *resolume.CompositionStore

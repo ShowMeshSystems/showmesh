@@ -284,7 +284,7 @@ func (m *resolumeManager) buildBundle(ctx context.Context, inst config.ResolumeI
 	return b, nil
 }
 
-// buildOSCBundle builds an OSC-only bundle (ADR-065): no collector, no
+// buildOSCBundle builds an OSC-only bundle (ADR-066): no collector, no
 // watcher and no recovery, so nothing ever contacts Arena's web server.
 func (m *resolumeManager) buildOSCBundle(inst config.ResolumeInstance) *resolumeBundle {
 	var osc *oscfade.Fader

@@ -1,4 +1,4 @@
-# ADR-065: Resolume can be controlled over OSC only
+# ADR-066: Resolume can be controlled over OSC only
 
 Status: Accepted (owner, 2026-10-20)
 Date: 2026-10-20
