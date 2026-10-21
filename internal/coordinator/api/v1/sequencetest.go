@@ -27,3 +27,22 @@ type SequenceTestConfigResponse struct {
 	CreatedByPrincipalName *string                   `json:"createdByPrincipalName"`
 	Source                 string                    `json:"source"`
 }
+
+// FPPSequenceFile is one sequence file and the FPP instances that hold it.
+type FPPSequenceFile struct {
+	Filename  string   `json:"filename"`
+	Instances []string `json:"instances"`
+}
+
+// FPPSequenceListInstance is one configured FPP's answer to the list read.
+type FPPSequenceListInstance struct {
+	ID    string `json:"id"`
+	Error string `json:"error,omitempty"`
+}
+
+// FPPSequenceListResponse is the body of GET /fpp/sequences.
+type FPPSequenceListResponse struct {
+	ServerTime string                    `json:"serverTime"`
+	Sequences  []FPPSequenceFile         `json:"sequences"`
+	Instances  []FPPSequenceListInstance `json:"instances"`
+}

@@ -5,7 +5,7 @@ Date: 2026-10-21
 Amends: [ADR-043](ADR-043-show-scoped-cues-and-playlist-authority.md)'s rule
 that only Cues a show playlist references reach a node's catalog, and
 [ADR-051](ADR-051-cue-audio-starts-on-the-multisync-start-packet.md) decision
-2's trigger source, while no night session is open.
+2's trigger source.
 
 ## Context
 
@@ -27,24 +27,29 @@ that only Cues a show playlist references reach a node's catalog, and
 2. The list runs only while its show is the active show and no night session
    is open (a current night session in any state other than `inactive` or
    `stopped`). It stays editable at any time.
-3. While it runs, a test mapping is a second way a Cue reaches nodes: the
-   catalog includes the mapped Cue and adds the mapped filenames to that Cue's
-   triggers, so nodes start its audio on the MultiSync START packet as for any
-   playlist Cue. A test-only Cue takes no part in catalog claim conflicts,
-   because FPP plays one sequence at a time and the test Cue plays instead of
-   a playlist entry, never beside one.
+3. A test mapping is a second way a Cue reaches nodes. The catalog always
+   includes the mapped Cue and lists the mapped filenames in that Cue's
+   `testTriggers`, separate from `triggers`, whether or not a night session
+   is open, so opening or closing a night never changes the catalog. A
+   test-only Cue takes no part in catalog claim conflicts, because FPP plays
+   one sequence at a time and the test Cue plays instead of a playlist entry,
+   never beside one.
 4. While it runs, when FPP reports a mapped sequence filename and no playlist
    entry resolves, the coordinator activates the mapped Cue in full (render,
    audio, LTC and actions) instead of applying the mismatch policy, also when
    the FPP instance has no binding to the show. A resolved playlist entry
    always wins. The activation clears the same way a playlist entry's does
    when FPP stops or moves on.
-5. While a night session is open the catalog and the activation decision are
-   exactly what they were before this ADR. Nodes hold a catalog without the
-   test triggers, so losing the coordinator mid-night cannot start a test Cue.
-   The catalog revision changes when a night opens or stops, so the existing
-   catalog redeploy brings nodes up to date, and night readiness already waits
-   for nodes to acknowledge the current catalog.
+5. The node decides whether `testTriggers` start audio on the MultiSync
+   START packet. The coordinator sends every node `night.state.set`
+   (`{"open": bool}`) when a night session opens or stops, when the node
+   says hello, and once a minute. The node stores the last value on disk and
+   keeps it through a restart and through coordinator or broker loss. While
+   it is open, or if the node never received one, the node ignores
+   `testTriggers`; while it is closed, a `testTriggers` filename starts the
+   Cue's audio exactly like a `triggers` filename, and a `triggers` filename
+   wins when both name the same file. While a night session is open the
+   coordinator's activation decision is exactly what it was before this ADR.
 6. A filename that a playlist entry of the same show already plays for a
    different Cue, or that another row maps to a different Cue, is refused at
    save. The same Cue named twice is accepted.
@@ -57,10 +62,11 @@ not a playback-derived "is a show running" flag, which
 
 - Testing a sequence needs no prepare, readiness or pre-show step and no edit
   to the show playlist.
-- When the active show has test mappings, starting or stopping a night
-  changes the catalog of every node a mapped Cue reaches. A node whose
-  redeploy is held because FPP is playing shows as stale in night readiness
-  until it is redeployed.
-- In show mode the coordinator pins catalogs; the pin is renewed when the
-  night gate changes. Editing the test list while show mode holds a pin
-  behaves like any other catalog edit made then.
+- Opening or closing a night needs no catalog redeploy, so a deploy held
+  while FPP plays cannot leave nodes on a stale catalog.
+- An agent older than this ADR drops `testTriggers` when it decodes a
+  catalog, so its computed revision disagrees and it refuses a catalog that
+  carries any test mapping. A catalog without test mappings omits the field
+  and keeps the revision older agents compute.
+- Editing the test list while show mode holds a pin behaves like any other
+  catalog edit made then.

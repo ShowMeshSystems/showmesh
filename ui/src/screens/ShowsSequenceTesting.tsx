@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { getSequenceTestConfig, listConfigObjects, putSequenceTestConfig, type ConfigSequenceTestEntry, type SequenceTestConfigResponse } from '../api'
-import { Button, Callout, Input, RuledStrip, Section, Select, Table, TableWrap } from '../kit'
+import { getSequenceTestConfig, listConfigObjects, listFPPSequences, putSequenceTestConfig, type ConfigSequenceTestEntry, type FPPSequenceListResponse, type SequenceTestConfigResponse } from '../api'
+import { Button, Callout, RuledStrip, Section, Select, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 
@@ -18,6 +18,8 @@ export function ShowsSequenceTesting() {
   const [readError, setReadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [fpp, setFpp] = useState<FPPSequenceListResponse | null>(null)
+  const [fppFailed, setFppFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -30,6 +32,13 @@ export function ShowsSequenceTesting() {
       })
       .catch((err: unknown) => {
         if (!cancelled) setReadError(describeApiError(err))
+      })
+    listFPPSequences()
+      .then((list) => {
+        if (!cancelled) setFpp(list)
+      })
+      .catch(() => {
+        if (!cancelled) setFppFailed(true)
       })
     return () => {
       cancelled = true
@@ -47,6 +56,9 @@ export function ShowsSequenceTesting() {
   const editReason = gate.allowed ? undefined : gate.reason
   const dirty = JSON.stringify(loaded.payload.entries) !== JSON.stringify(draft)
   const blank = draft.some((e) => e.sequenceFilename.trim() === '' || e.cue === '')
+  const fppFiles = fpp?.sequences.map((f) => f.filename) ?? []
+  const notOnFPP = (name: string) => fpp !== null && name !== '' && !fppFiles.includes(name)
+  const unreachable = fpp?.instances.filter((inst) => inst.error !== undefined && inst.error !== '') ?? []
   const setRow = (i: number, patch: Partial<ConfigSequenceTestEntry>) => setDraft((d) => d.map((e, j) => (j === i ? { ...e, ...patch } : e)))
 
   const save = () => {
@@ -68,6 +80,10 @@ export function ShowsSequenceTesting() {
       detail="When FPP plays a sequence file listed here, its cue runs in full: audio, projection, LTC and actions. A night session turns these off until it stops."
     >
       {!loaded.running && loaded.notRunningReason !== undefined && <Callout>{loaded.notRunningReason}</Callout>}
+      {fppFailed && <RuledStrip absence="failed" label="FPP files" fact="The FPP file list could not be loaded. Reload the page to try again." />}
+      {unreachable.map((inst) => (
+        <RuledStrip key={inst.id} absence="failed" label={`FPP ${inst.id}`} fact={inst.error ?? ''} />
+      ))}
       {draft.length === 0 ? (
         <p className="sm-small sm-muted">No test sequences yet. Add one to run a cue from FPP without putting it in a playlist.</p>
       ) : (
@@ -86,13 +102,23 @@ export function ShowsSequenceTesting() {
               {draft.map((entry, i) => (
                 <tr key={i}>
                   <td>
-                    <Input
+                    <Select
                       aria-label={`Sequence file, row ${i + 1}`}
                       value={entry.sequenceFilename}
-                      placeholder="Song.fseq"
                       disabled={editReason !== undefined}
                       onChange={(e) => setRow(i, { sequenceFilename: e.target.value })}
-                    />
+                    >
+                      <option value="">Pick a sequence file</option>
+                      {entry.sequenceFilename !== '' && !fppFiles.includes(entry.sequenceFilename) && (
+                        <option value={entry.sequenceFilename}>{notOnFPP(entry.sequenceFilename) ? `${entry.sequenceFilename} (not found on FPP)` : entry.sequenceFilename}</option>
+                      )}
+                      {fppFiles.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </Select>
+                    {notOnFPP(entry.sequenceFilename) && <span className="sm-small sm-muted">Not found on FPP.</span>}
                   </td>
                   <td>
                     <Select aria-label={`Cue, row ${i + 1}`} value={entry.cue} disabled={editReason !== undefined} onChange={(e) => setRow(i, { cue: e.target.value })}>
@@ -115,7 +141,7 @@ export function ShowsSequenceTesting() {
           </Table>
         </TableWrap>
       )}
-      {blank && <RuledStrip absence="empty" label="Incomplete" fact="Enter a sequence file and pick a cue for every row, or remove the row." />}
+      {blank && <RuledStrip absence="empty" label="Incomplete" fact="Pick a sequence file and a cue for every row, or remove the row." />}
       {saveError !== null && <RuledStrip absence="failed" label="Not saved" fact={saveError} />}
       <div className="sm-btn-row">
         <Button disabled={editReason !== undefined || cues.length === 0} title={cues.length === 0 ? 'This show has no cues yet.' : editReason} onClick={() => setDraft((d) => [...d, { sequenceFilename: '', cue: '' }])}>

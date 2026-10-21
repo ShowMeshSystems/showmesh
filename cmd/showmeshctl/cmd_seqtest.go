@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -48,6 +49,8 @@ func cmdSeqTest(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		return cmdSeqTestGet(rest, stdout, stderr, clock)
 	case "set":
 		return cmdSeqTestSet(rest, stdout, stderr, clock)
+	case "sequences":
+		return cmdSeqTestSequences(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl seqtest: unknown subcommand %q\n\n", sub)
 		printSeqTestUsage(stderr)
@@ -57,6 +60,7 @@ func cmdSeqTest(args []string, stdout, stderr io.Writer, clock func() time.Time)
 
 func printSeqTestUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl seqtest [get|set] --show <id> [flags]
+       showmeshctl seqtest sequences [flags]
 
 A show's sequence test list (show.sequencetest). While the show is active and
 no night session is open, FPP playing a listed sequence file runs its cue.
@@ -66,6 +70,7 @@ Subcommands:
   set   write a new full-replacement list from a JSON payload
         (--file <path>, or stdin if omitted), requires config:write:
         {"entries":[{"sequenceFilename":"Test1.fseq","cue":"intro"}]}
+  sequences  list the sequence files the configured FPPs hold
 `)
 }
 
@@ -173,6 +178,59 @@ func printSeqTestConfig(stdout, stderr io.Writer, cmdLabel string, g *globalFlag
 	}
 	for _, e := range resp.Payload.Entries {
 		_, _ = fmt.Fprintf(stdout, "  %s -> cue %s\n", e.SequenceFilename, e.Cue)
+	}
+	return exitOK
+}
+
+type fppSequenceListResponse struct {
+	ServerTime time.Time `json:"serverTime"`
+	Sequences  []struct {
+		Filename  string   `json:"filename"`
+		Instances []string `json:"instances"`
+	} `json:"sequences"`
+	Instances []struct {
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	} `json:"instances"`
+}
+
+func cmdSeqTestSequences(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	const cmdLabel = "seqtest sequences"
+	g, code, ok := sitePowerArgs(cmdLabel, args, stderr, func(*flag.FlagSet) {})
+	if !ok {
+		return code
+	}
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	var raw json.RawMessage
+	if err := c.getJSON(ctx, "/api/v1/fpp/sequences", nil, &raw); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	var resp fppSequenceListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+	if g.output == outputJSON {
+		if err := printJSON(stdout, raw); err != nil {
+			return reportError(stderr, cmdLabel, err)
+		}
+		return exitOK
+	}
+	for _, inst := range resp.Instances {
+		if inst.Error != "" {
+			_, _ = fmt.Fprintf(stdout, "FPP %s: %s\n", inst.ID, inst.Error)
+		}
+	}
+	if len(resp.Sequences) == 0 {
+		_, _ = fmt.Fprintln(stdout, "no sequence files")
+	}
+	for _, s := range resp.Sequences {
+		_, _ = fmt.Fprintf(stdout, "%s  (%s)\n", s.Filename, strings.Join(s.Instances, ", "))
 	}
 	return exitOK
 }

@@ -104,7 +104,7 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
 	}
 
-	testTriggers, err := activeSequenceTestTriggers(ctx, st, showID)
+	testTriggers, err := sequenceTestTriggers(ctx, st, showID)
 	if err != nil {
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
 	}
@@ -174,10 +174,11 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		outputs := resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets, showAudioNodes, assetsBySequence)
 
 		entries = append(entries, cuecatalog.Entry{
-			CueID:       obj.ID,
-			CueRevision: obj.CurrentRevision,
-			Outputs:     outputs,
-			Triggers:    resolveCueTriggers(append(append([]string(nil), triggerSeeds[obj.ID]...), testTriggers[obj.ID]...), outputs),
+			CueID:        obj.ID,
+			CueRevision:  obj.CurrentRevision,
+			Outputs:      outputs,
+			Triggers:     resolveCueTriggers(triggerSeeds[obj.ID], outputs),
+			TestTriggers: sortedTestTriggers(testTriggers[obj.ID]),
 		})
 
 		// A test-only Cue plays instead of a playlist entry, never beside one.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -58,13 +59,9 @@ func SequenceTestMappings(ctx context.Context, st *store.Store, showID string) (
 	return out, nil
 }
 
-// activeSequenceTestTriggers returns Cue -> mapped filenames for showID, or
-// nil while a night session is open.
-func activeSequenceTestTriggers(ctx context.Context, st *store.Store, showID string) (map[string][]string, error) {
-	enabled, err := SequenceTestingEnabled(ctx, st)
-	if err != nil || !enabled {
-		return nil, err
-	}
+// sequenceTestTriggers returns Cue -> mapped filenames for showID. The
+// catalog carries them whether or not a night is open; nodes gate them.
+func sequenceTestTriggers(ctx context.Context, st *store.Store, showID string) (map[string][]string, error) {
 	mappings, err := SequenceTestMappings(ctx, st, showID)
 	if err != nil {
 		return nil, err
@@ -74,6 +71,16 @@ func activeSequenceTestTriggers(ctx context.Context, st *store.Store, showID str
 		out[cue] = append(out[cue], filename)
 	}
 	return out, nil
+}
+
+// sortedTestTriggers sorts filenames, nil when empty so the field is omitted.
+func sortedTestTriggers(filenames []string) []string {
+	if len(filenames) == 0 {
+		return nil
+	}
+	out := slices.Clone(filenames)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // PlaylistSequenceFilenameClaims returns filename -> the Cues showID's FPP

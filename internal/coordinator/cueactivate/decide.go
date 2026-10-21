@@ -66,9 +66,6 @@ type ShowPin struct {
 	// Active is this pin's own frozen Show/Generation -- captured once, at
 	// construction, never re-read from the store for the life of the pin.
 	Active assetsync.ActiveShow
-	// SequenceTesting is whether test mappings were in the catalog when
-	// the pin started; the caller re-pins when it changes.
-	SequenceTesting bool
 
 	mu       sync.Mutex
 	catalogs map[string]assetsync.Catalog

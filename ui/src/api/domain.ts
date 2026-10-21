@@ -506,6 +506,7 @@ export type ConfigSitePowerPayload = components['schemas']['ConfigSitePowerPaylo
 export type SequenceTestConfigResponse = components['schemas']['SequenceTestConfigResponse']
 export type ConfigSequenceTestPayload = components['schemas']['ConfigSequenceTestPayload']
 export type ConfigSequenceTestEntry = components['schemas']['ConfigSequenceTestEntry']
+export type FPPSequenceListResponse = components['schemas']['FPPSequenceListResponse']
 export type ConfigShutdownSequence = components['schemas']['ConfigShutdownSequence']
 export type ConfigShutdownStep = components['schemas']['ConfigShutdownStep']
 export type SitePowerRunResponse = components['schemas']['SitePowerRunResponse']

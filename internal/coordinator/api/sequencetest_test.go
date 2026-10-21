@@ -1,10 +1,13 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
 
@@ -44,5 +47,42 @@ func TestSequenceTestSaveRefusesAFilenameAPlaylistPlaysForAnotherCue(t *testing.
 	assertMatchesSchema(t, c, "SequenceTestConfigResponse", []byte(body))
 	if !strings.Contains(body, `"revision":1`) || !strings.Contains(body, `"Other.fseq"`) || !strings.Contains(body, `"running":false`) {
 		t.Fatalf("PUT body = %s", body)
+	}
+}
+
+func TestFPPSequencesListsTheUnionAndNamesAnUnreachableFPP(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	fpp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/files/sequences" || r.URL.Query().Get("nameOnly") != "1" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`["NewSong.fseq","sub/Thriller.fseq"]`))
+	}))
+	t.Cleanup(fpp.Close)
+	deps := assetManifestTestDeps(t, svc, st)
+	deps.FPP = &fakeFPPLister{views: []FPPInstanceView{
+		{InstanceID: "player-01", Endpoint: fpp.URL},
+		{InstanceID: "player-02", Endpoint: "http://127.0.0.1:1"},
+	}}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/fpp/sequences", map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "FPPSequenceListResponse", body)
+	var got v1.FPPSequenceListResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Sequences) != 2 || got.Sequences[0].Filename != "NewSong.fseq" || got.Sequences[1].Filename != "sub/Thriller.fseq" || got.Sequences[0].Instances[0] != "player-01" {
+		t.Fatalf("sequences = %+v", got.Sequences)
+	}
+	if len(got.Instances) != 2 || got.Instances[0].Error != "" || got.Instances[1].Error == "" {
+		t.Fatalf("instances = %+v, want player-02 to carry an error", got.Instances)
 	}
 }

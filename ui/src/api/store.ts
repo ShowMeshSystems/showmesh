@@ -343,6 +343,7 @@ type SchemaSitePowerConfigResponse = components['schemas']['SitePowerConfigRespo
 type SchemaConfigSitePowerPayload = components['schemas']['ConfigSitePowerPayload']
 type SchemaSequenceTestConfigResponse = components['schemas']['SequenceTestConfigResponse']
 type SchemaConfigSequenceTestPayload = components['schemas']['ConfigSequenceTestPayload']
+type SchemaFPPSequenceListResponse = components['schemas']['FPPSequenceListResponse']
 type SchemaSitePowerRunResponse = components['schemas']['SitePowerRunResponse']
 type SchemaConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
 
@@ -4228,6 +4229,16 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.getJson<SchemaSequenceTestConfigResponse>(`/config/show.sequencetest/${encodeURIComponent(showId)}`, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/fpp/sequences`: the sequence files the configured FPPs hold. */
+  async listFPPSequences(): Promise<SchemaFPPSequenceListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPSequenceListResponse>('/fpp/sequences', controller.signal)
     } finally {
       this.endSideCall(controller)
     }

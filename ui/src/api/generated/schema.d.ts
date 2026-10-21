@@ -227,6 +227,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fpp/sequences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the sequence files the configured FPPs hold
+         * @description Behind `fpp:read` or `config:write`. The coordinator reads each FPP in `fpp.endpoints` over FPP's own API and returns the de-duplicated union of their sequence files, sorted by name, with the FPP instances that hold each. `instances` has one entry per configured FPP; one that could not be read carries an operator sentence in `error` and contributes no files. Read only: nothing is written to FPP.
+         */
+        get: operations["listFPPSequences"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fpp/brightness": {
         parameters: {
             query?: never;
@@ -6327,6 +6347,22 @@ export interface components {
             show: string;
             entries: components["schemas"]["ConfigSequenceTestEntry"][];
         };
+        /** @description The body of GET /fpp/sequences. */
+        FPPSequenceListResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            sequences: {
+                /** @description The sequence filename as FPP names it, with a subfolder file as a relative path. */
+                filename: string;
+                /** @description The FPP instance ids that hold this file. */
+                instances: string[];
+            }[];
+            instances: {
+                id: string;
+                /** @description Present only when this FPP's sequence list could not be read: an operator sentence. */
+                error?: string;
+            }[];
+        };
         SequenceTestConfigResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -9878,6 +9914,31 @@ export interface operations {
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listFPPSequences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPSequenceListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };

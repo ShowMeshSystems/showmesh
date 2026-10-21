@@ -105,6 +105,7 @@ import type {
   ConfigSitePowerPayload,
   SequenceTestConfigResponse,
   ConfigSequenceTestPayload,
+  FPPSequenceListResponse,
   SitePowerRunResponse,
   ConfigWeatherDelayPayload,
   SetPrincipalPasswordRequest,
@@ -645,6 +646,10 @@ export function putSitePowerConfig(payload: ConfigSitePowerPayload): Promise<Sit
 
 export function getSequenceTestConfig(showId: string): Promise<SequenceTestConfigResponse> {
   return store.getSequenceTestConfig(showId)
+}
+
+export function listFPPSequences(): Promise<FPPSequenceListResponse> {
+  return store.listFPPSequences()
 }
 
 export function putSequenceTestConfig(showId: string, payload: ConfigSequenceTestPayload): Promise<SequenceTestConfigResponse> {

@@ -603,6 +603,36 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+  /fpp/sequences:
+    get:
+      operationId: listFPPSequences
+      summary: List the sequence files the configured FPPs hold
+      description: >-
+        Behind `fpp:read` or `config:write`. The coordinator reads each
+        FPP in `fpp.endpoints` over FPP's own API and returns the
+        de-duplicated union of their sequence files, sorted by name, with
+        the FPP instances that hold each. `instances` has one entry per
+        configured FPP; one that could not be read carries an operator
+        sentence in `error` and contributes no files. Read only: nothing
+        is written to FPP.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPSequenceListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /fpp/brightness:
     get:
       operationId: getFPPBrightness
@@ -17619,6 +17649,43 @@ components:
           maxItems: 256
           items:
             $ref: "#/components/schemas/ConfigSequenceTestEntry"
+    FPPSequenceListResponse:
+      type: object
+      description: The body of GET /fpp/sequences.
+      required: [serverTime, sequences, instances]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        sequences:
+          type: array
+          items:
+            type: object
+            required: [filename, instances]
+            properties:
+              filename:
+                type: string
+                description: >-
+                  The sequence filename as FPP names it, with a subfolder
+                  file as a relative path.
+              instances:
+                type: array
+                description: The FPP instance ids that hold this file.
+                items:
+                  type: string
+        instances:
+          type: array
+          items:
+            type: object
+            required: [id]
+            properties:
+              id:
+                type: string
+              error:
+                type: string
+                description: >-
+                  Present only when this FPP's sequence list could not be
+                  read: an operator sentence.
     SequenceTestConfigResponse:
       type: object
       additionalProperties: false

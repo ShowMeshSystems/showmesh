@@ -294,16 +294,10 @@ func (l *CueActivationLoop) resolvePin(ctx context.Context) (*cueactivate.ShowPi
 		return nil, fmt.Errorf("resolve active show: %w", err)
 	}
 
-	testing, err := assetsync.SequenceTestingEnabled(ctx, l.h.deps.AssetManifests)
-	if err != nil {
-		return nil, fmt.Errorf("resolve sequence testing: %w", err)
-	}
-
 	l.pinMu.Lock()
 	defer l.pinMu.Unlock()
-	if l.pin == nil || l.pin.Active.ShowID != active.ShowID || l.pin.Active.Generation != active.Generation || l.pin.SequenceTesting != testing {
+	if l.pin == nil || l.pin.Active.ShowID != active.ShowID || l.pin.Active.Generation != active.Generation {
 		l.pin = cueactivate.NewShowPin(active)
-		l.pin.SequenceTesting = testing
 		l.pinnedAt = l.h.now()
 	}
 	return l.pin, nil

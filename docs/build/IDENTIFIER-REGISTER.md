@@ -578,6 +578,7 @@ after shipping a breaking change to stored history.
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
 | `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
+| `night.state.set` | shipped | ADR-067 sequence testing: node-scoped, params `{"open": bool}`. The coordinator sends whether a night session is open on change, on node hello, and once a minute. The node persists it and honors catalog `testTriggers` only while it is false; a node that never received it treats the night as open. Result signal `node.night.open` falls under the `node.*` observation namespace |
 | `fallback.program.deploy` | released | Track J seam J1 landed WITHOUT it, which is the condition its own reservation named. The plugin fetches over the HTTP paths under `/api/v1/fallback-programs`; the coordinator never pushes. Free to reuse |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,

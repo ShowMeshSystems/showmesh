@@ -341,6 +341,7 @@ Commands:
                                        requires show:emergencystop:invoke)
   seqtest get --show <id>             show a show's sequence test list and whether it runs now
   seqtest set --show <id>             write a show's sequence test list from a JSON payload
+  seqtest sequences                   list the sequence files the configured FPPs hold
                                        (write, full replacement, requires config:write)
   weather-delay start                 start a weather delay: nothing starts output until resumed
                                        (write, requires show:weatherdelay:invoke, no confirmation)
