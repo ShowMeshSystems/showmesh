@@ -1540,3 +1540,103 @@ func TestLightsFade_AProjectionFadeThatFailsToSendIsRetried(t *testing.T) {
 		t.Fatalf("projection fades sent after the broker came back = %+v, want one to full level", n.renderPub.payload)
 	}
 }
+
+// fullLog is every recorded event, landings included, in order.
+func (n *lightsNight) fullLog() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.log...)
+}
+
+func TestLightsFade_RestingStartsOnlyAfterTheDimHasLanded(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeInMs": 8000, `)
+	n.awaitRestGain = false
+	n.openToFirstShow()
+	n.delay = func(f nightLightingFade) time.Duration {
+		if f.TargetPercent == 0 {
+			return 300 * time.Millisecond
+		}
+		return 0
+	}
+	before := len(n.fullLog())
+
+	n.advance(30 * time.Second)
+	n.host.setIdle()
+	n.tickNoWait()
+	n.mustState("show completion", nightStateTransitionToResting)
+	n.advance(time.Second)
+	n.tickNoWait()
+	if eventIndex(n.fullLog()[before:], "start:halloween-resting") >= 0 {
+		t.Fatalf("resting started before the dim landed: %v", n.fullLog()[before:])
+	}
+	n.settle(2)
+	n.mustState("enter resting", nightStateRestingIntershow)
+
+	got := n.fullLog()[before:]
+	dark, landed, start, up := eventIndex(got, "gain:player-01:0:0s"), eventIndex(got, "land:0"), eventIndex(got, "start:halloween-resting"), eventIndex(got, "gain:player-01:100:8s")
+	if dark < 0 || landed < dark || start < landed || up < start {
+		t.Fatalf("want the dim sent and landed, then resting, then the fade-in, got %v", got)
+	}
+}
+
+func TestLightsFade_RestingStartsAfterTheCapWhenThePlayerNeverDims(t *testing.T) {
+	n := newLightsNight(t, `"lightsFadeInMs": 8000, `)
+	n.awaitRestGain = false
+	n.openToFirstShow()
+	n.setFail(func(f nightLightingFade, _ string) bool { return f.TargetPercent == 0 })
+	before := len(n.events())
+
+	n.advance(30 * time.Second)
+	n.host.setIdle()
+	n.tick()
+	for i := 0; i < 2; i++ {
+		n.advance(time.Second)
+		n.tick()
+		if eventIndex(n.events()[before:], "start:halloween-resting") >= 0 {
+			t.Fatalf("resting started %d s after the show, before the cap: %v", i+1, n.events()[before:])
+		}
+	}
+	n.advance(time.Second)
+	n.tick()
+	got := n.events()[before:]
+	start := eventIndex(got, "start:halloween-resting")
+	if start < 0 {
+		t.Fatalf("resting did not start once the cap passed: %v", got)
+	}
+	var dims int
+	for _, e := range got[:start] {
+		if e == "gain:player-01:0:0s" {
+			dims++
+		}
+	}
+	if dims < 2 {
+		t.Fatalf("the dim must be retried before the cap, got %d tries: %v", dims, got)
+	}
+	if eventIndex(got[start:], "gain:player-01:100:8s") < 0 {
+		t.Fatalf("the fade-in must still follow the resting start: %v", got)
+	}
+}
+
+func TestLightsFade_TheProjectionFadeInNeverOvertakesTheDark(t *testing.T) {
+	oldDeadline, oldPoll := renderCommandConfirmDeadline, renderCommandPollInterval
+	renderCommandConfirmDeadline, renderCommandPollInterval = 200*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { renderCommandConfirmDeadline, renderCommandPollInterval = oldDeadline, oldPoll })
+
+	n := newLightsNight(t, `"renderFadeInMs": 8000, `)
+	renderPutSurface(t, n.st, "front", "halloween-2026", "render-01")
+	rec := store.NightSessionRecord{ID: "sess-dark", Cycle: 1}
+	ctx := context.Background()
+	n.h.nightRenderFade(ctx, n.now, rec, "dark", 0, time.Time{}, time.Time{}, 0)
+	n.h.nightRenderFade(ctx, n.now, rec, "in", 100, time.Time{}, time.Time{}, 8000)
+	n.h.nightRenderFadeWG.Wait()
+
+	n.renderPub.mu.Lock()
+	defer n.renderPub.mu.Unlock()
+	var levels []any
+	for _, p := range n.renderPub.payload {
+		levels = append(levels, p.Payload.Params["targetPercent"])
+	}
+	if len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(100) {
+		t.Fatalf("projection levels sent = %v, want the dark 0 and then the fade-in 100", levels)
+	}
+}

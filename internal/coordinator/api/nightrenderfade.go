@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -50,6 +51,37 @@ func nightRenderFadeKey(rec store.NightSessionRecord, step string) string {
 	return nightLightsKey(rec, "render-"+step)
 }
 
+// nightRenderFadeRun tracks one projection fade step's sends; done closes once every surface's send returned.
+type nightRenderFadeRun struct {
+	startedAt time.Time
+	pending   atomic.Int64
+	done      chan struct{}
+}
+
+func (r *nightRenderFadeRun) finish() bool {
+	if r.pending.Add(-1) == 0 {
+		close(r.done)
+		return true
+	}
+	return false
+}
+
+// nightRenderFadeSettled reports whether this cycle's step finished sending,
+// and whether limit passed since it started first. A step never sent has nothing to wait for.
+func (h *handlers) nightRenderFadeSettled(rec store.NightSessionRecord, step string, now time.Time, limit time.Duration) (settled, capped bool) {
+	v, ok := h.nightRenderFadeRuns.Load(nightRenderFadeKey(rec, step))
+	if !ok {
+		return true, false
+	}
+	run := v.(*nightRenderFadeRun)
+	select {
+	case <-run.done:
+		return true, false
+	default:
+		return false, now.Sub(run.startedAt) >= limit
+	}
+}
+
 // nightRenderFadeSent reports whether this cycle's projection step was sent.
 func (h *handlers) nightRenderFadeSent(rec store.NightSessionRecord, step string) bool {
 	_, ok := h.nightRenderFadesSent.Load(nightRenderFadeKey(rec, step))
@@ -73,9 +105,27 @@ func (h *handlers) nightRenderFade(ctx context.Context, now time.Time, rec store
 	issuer := nightControllerIssuer(rec)
 	bgCtx := context.WithoutCancel(ctx)
 	until := now.Add(nightRenderFadeRetryWindow)
+	if step == "dark" {
+		until = now.Add(nightRestingDarkCap)
+	}
 	if !endsAt.IsZero() {
 		until = endsAt
 	}
+	// The fade-in never goes out ahead of this cycle's dark send.
+	var before *nightRenderFadeRun
+	if step == "in" {
+		if v, ok := h.nightRenderFadeRuns.Load(nightRenderFadeKey(rec, "dark")); ok {
+			before = v.(*nightRenderFadeRun)
+		}
+	}
+	run := &nightRenderFadeRun{startedAt: now, done: make(chan struct{})}
+	run.pending.Store(int64(len(surfaces)) + 1)
+	h.nightRenderFadeRuns.Store(key, run)
+	defer func() {
+		if run.finish() && step == "dark" {
+			h.nightWakeLoop()
+		}
+	}()
 	for _, s := range surfaces {
 		p := map[string]any{"surfaceId": s.SurfaceID, "targetPercent": float64(target)}
 		if !startsAt.IsZero() {
@@ -95,12 +145,37 @@ func (h *handlers) nightRenderFade(ctx context.Context, now time.Time, rec store
 		}
 		lane := rec.ID + "|" + s.NodeID + "|" + s.SurfaceID
 		seq := h.nightRenderFadeSeq.Add(1)
-		h.nightRenderFadeLatest.Store(lane, seq)
+		if before == nil {
+			h.nightRenderFadeLatest.Store(lane, seq)
+		}
 		h.nightRenderFadeWG.Add(1)
 		go func() {
 			defer h.nightRenderFadeWG.Done()
+			if before != nil {
+				<-before.done
+				h.nightRenderFadeClaim(lane, seq)
+			}
 			h.nightRenderFadeSend(bgCtx, now, rec, in, lane, seq, until)
+			if run.finish() && step == "dark" {
+				h.nightWakeLoop()
+			}
 		}()
+	}
+}
+
+// nightRenderFadeClaim makes seq the lane's newest step unless a newer one already is.
+func (h *handlers) nightRenderFadeClaim(lane string, seq uint64) {
+	for {
+		v, ok := h.nightRenderFadeLatest.Load(lane)
+		if !ok {
+			if _, loaded := h.nightRenderFadeLatest.LoadOrStore(lane, seq); !loaded {
+				return
+			}
+			continue
+		}
+		if v.(uint64) >= seq || h.nightRenderFadeLatest.CompareAndSwap(lane, v, seq) {
+			return
+		}
 	}
 }
 

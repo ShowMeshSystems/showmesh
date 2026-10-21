@@ -217,6 +217,10 @@ type handlers struct {
 	nightRenderFadeLatest sync.Map
 	nightRenderFadeSeq    atomic.Uint64
 
+	// nightRenderFadeRuns holds each sent projection fade step's progress,
+	// keyed like nightRenderFadesSent.
+	nightRenderFadeRuns sync.Map
+
 	// emergencyStops counts emergency stops fired since start, so a cue's
 	// show actions still queued can tell a stop happened and hold.
 	emergencyStops atomic.Int64
