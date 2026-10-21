@@ -120,6 +120,11 @@ type multiSyncCueAudioTrigger struct {
 	generation   uint64
 	preparedLate map[string]bool
 
+	// stoppedWhilePlaying holds, per filename, the start record that was
+	// current when a STOP arrived with that sequence's audio still playing.
+	// A START that finds the same record still current is a restart.
+	stoppedWhilePlaying map[string]audioStartTriggerRecord
+
 	// openMu guards openWaiters: filename -> a channel closed once that
 	// filename's own OPEN-triggered cold prepare has finished, so START
 	// can wait for it without blocking the packet read loop.
@@ -133,11 +138,12 @@ type multiSyncCueAudioTrigger struct {
 // this package (cueactivationaudio.go's activationRevision).
 func newMultiSyncCueAudioTrigger(logger *slog.Logger, now func() time.Time, audioReportTrigger chan<- struct{}) *multiSyncCueAudioTrigger {
 	return &multiSyncCueAudioTrigger{
-		logger:             logger,
-		now:                now,
-		audioReportTrigger: audioReportTrigger,
-		preparedLate:       make(map[string]bool),
-		openWaiters:        make(map[string]chan struct{}),
+		logger:              logger,
+		now:                 now,
+		audioReportTrigger:  audioReportTrigger,
+		preparedLate:        make(map[string]bool),
+		stoppedWhilePlaying: make(map[string]audioStartTriggerRecord),
+		openWaiters:         make(map[string]chan struct{}),
 	}
 }
 
@@ -253,6 +259,27 @@ func (c *multiSyncCueAudioTrigger) consumePreparedLate(filename string) bool {
 	return late
 }
 
+func (c *multiSyncCueAudioTrigger) markStoppedWhilePlaying(filename string, rec audioStartTriggerRecord) {
+	c.stateMu.Lock()
+	c.stoppedWhilePlaying[filename] = rec
+	c.stateMu.Unlock()
+}
+
+// consumeRestart reports whether a START for filename restarts audio this
+// node started before that sequence's last STOP. A start recorded after the
+// STOP, such as a coordinator activation, is left alone.
+func (c *multiSyncCueAudioTrigger) consumeRestart(filename string, registry *audioStartTriggerRegistry) bool {
+	c.stateMu.Lock()
+	stopped, ok := c.stoppedWhilePlaying[filename]
+	delete(c.stoppedWhilePlaying, filename)
+	c.stateMu.Unlock()
+	if !ok {
+		return false
+	}
+	current, ok := registry.get(cueActivationAudioSessionID)
+	return ok && current == stopped
+}
+
 func (c *multiSyncCueAudioTrigger) bumpGeneration() uint64 {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
@@ -318,6 +345,9 @@ func (c *multiSyncCueAudioTrigger) HandleSequencePacket(ctx context.Context, pkt
 		c.waitOpen(pkt.Filename)
 		c.handleStart(ctx, mgr, assetDir, registry, entry, pkt.Filename, arrival)
 	case multisync.SyncActionStop:
+		if rec, ok := registry.get(cueActivationAudioSessionID); ok && c.sessionAlreadyPlaying(ctx, mgr) {
+			c.markStoppedWhilePlaying(pkt.Filename, rec)
+		}
 		gen := c.bumpGeneration()
 		c.handleStop(ctx, mgr, timeline, entry, pkt.Filename, gen)
 	}
@@ -457,14 +487,24 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 
 	target := c.targetIdentity(entry)
 
+	restart := c.consumeRestart(filename, registry)
 	cueIdentity, cueReady := mgr.LoadedMediaIdentity(cueActivationAudioSessionID)
 	if cueReady && cueIdentity == target && c.sessionAlreadyPlaying(ctx, mgr) {
-		// Already playing this exact media, from either trigger source: a
-		// coordinator activation that got here first is left alone
-		// (ADR-051 decision 6 / item 7), and a MultiSync START arriving
-		// second must be left alone the same way: restarting would be an
-		// audible glitch for no benefit.
-		return
+		if !restart {
+			// Already playing this exact media, from either trigger source: a
+			// coordinator activation that got here first is left alone
+			// (ADR-051 decision 6 / item 7), and a MultiSync START arriving
+			// second must be left alone the same way.
+			return
+		}
+		// FPP stopped and restarted this sequence, so the song starts over.
+		// Stopping releases the handle, so the cold prepare below runs. The
+		// stop's revision sits just below now so the restart's own steps,
+		// minted from now or later, still outrank it.
+		stopAt := c.now().Add(-time.Nanosecond)
+		c.logger.Info("multisync: sequence restarted, starting its cue audio over", "cue_id", entry.CueID, "sequence_filename", filename)
+		mgr.Stop(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "restart-stop", stopAt), c.revision(stopAt, cueactivation.AudioSessionStepApply))
+		cueIdentity, cueReady = mgr.LoadedMediaIdentity(cueActivationAudioSessionID)
 	}
 
 	preparedLate := c.consumePreparedLate(filename)

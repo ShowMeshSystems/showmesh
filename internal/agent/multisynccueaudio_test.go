@@ -1042,3 +1042,104 @@ func TestMultiSyncCueAudioStartUsesEachCuesLTCOffset(t *testing.T) {
 		}
 	}
 }
+
+// restartTestRig plays cue-restart's song from a cold MultiSync START and
+// lets it run 30 seconds, so a later restart is visible as a position jump.
+func restartTestRig(t *testing.T) (*multiSyncCueAudioTrigger, *audio.Manager, *fakeClock, *scriptableClockSource) {
+	t.Helper()
+	dir := t.TempDir()
+	clk := &fakeClock{t: time.Date(2026, 10, 20, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clk)
+	media := newScriptableClockSource(time.Unix(5_000_000_000, 0))
+	media.setStep(time.Millisecond)
+	mgr.SetClockSource(media)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+		MultisyncStartLeadMs: 5,
+	})
+	resetTriggerRegistry(t)
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	newTriggerTestCatalog(t, catalogStore, "cue-restart", "wake-up.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
+
+	trigger := newMultiSyncCueAudioTrigger(discardLogger(), clk.now, nil)
+	timeline := multisync.NewTimeline(clk.now, multisync.Config{})
+	timeline.SetStepTime(10 * time.Millisecond)
+	trigger.SetSources(catalogStore, mgr, dir, timeline, nil)
+
+	sendSequencePacket(trigger, multisync.SyncActionStart)
+	clk.advance(30 * time.Second)
+	if pos := cueSessionPosition(t, mgr); pos < 29*time.Second {
+		t.Fatalf("position before the restart = %v, want about 30s", pos)
+	}
+	return trigger, mgr, clk, media
+}
+
+func sendSequencePacket(trigger *multiSyncCueAudioTrigger, action multisync.SyncAction) {
+	trigger.HandleSequencePacket(context.Background(), multisync.SyncPacket{
+		Action: action, FileType: multisync.SyncFileTypeSequence, Filename: "wake-up.fseq",
+	})
+}
+
+func cueSessionPosition(t *testing.T, mgr *audio.Manager) time.Duration {
+	t.Helper()
+	for _, snap := range mgr.Snapshot(context.Background()) {
+		if snap.ID == cueActivationAudioSessionID {
+			if snap.State != pkgaudio.StatePlaying {
+				t.Fatalf("cue session state = %s, want playing", snap.State)
+			}
+			return snap.Position
+		}
+	}
+	t.Fatal("no cue session")
+	return 0
+}
+
+// TestMultiSyncCueAudioSequenceRestartStartsAudioOver covers backing up to
+// the start of a sequence: FPP sends STOP then START for the same file while
+// its song is still playing, and the song must start over.
+func TestMultiSyncCueAudioSequenceRestartStartsAudioOver(t *testing.T) {
+	trigger, mgr, clk, _ := restartTestRig(t)
+
+	sendSequencePacket(trigger, multisync.SyncActionStop)
+	clk.advance(time.Millisecond)
+	sendSequencePacket(trigger, multisync.SyncActionOpen)
+	trigger.waitOpen("wake-up.fseq")
+	sendSequencePacket(trigger, multisync.SyncActionStart)
+
+	if pos := cueSessionPosition(t, mgr); pos > time.Second {
+		t.Fatalf("position after the restart = %v, want the song back at its start", pos)
+	}
+}
+
+// TestMultiSyncCueAudioRepeatedStartDoesNotRestart keeps a duplicate START
+// with no STOP before it from restarting a song already playing.
+func TestMultiSyncCueAudioRepeatedStartDoesNotRestart(t *testing.T) {
+	trigger, mgr, _, _ := restartTestRig(t)
+
+	sendSequencePacket(trigger, multisync.SyncActionStart)
+
+	if pos := cueSessionPosition(t, mgr); pos < 29*time.Second {
+		t.Fatalf("position after a repeated START = %v, want about 30s", pos)
+	}
+}
+
+// TestMultiSyncCueAudioStartAfterNewerStartDoesNotRestart leaves alone a
+// song something else started after the STOP, such as a coordinator
+// activation that reached the node before the MultiSync START did.
+func TestMultiSyncCueAudioStartAfterNewerStartDoesNotRestart(t *testing.T) {
+	trigger, mgr, clk, _ := restartTestRig(t)
+
+	sendSequencePacket(trigger, multisync.SyncActionStop)
+	cueActivationTriggerRegistry.set(cueActivationAudioSessionID, audioStartTriggerRecord{
+		Trigger: pkgaudio.StartTriggerCoordinator, CueID: "cue-restart",
+	})
+	clk.advance(time.Millisecond)
+	sendSequencePacket(trigger, multisync.SyncActionStart)
+
+	if pos := cueSessionPosition(t, mgr); pos < 29*time.Second {
+		t.Fatalf("position after START = %v, want the newer start left playing at about 30s", pos)
+	}
+}
