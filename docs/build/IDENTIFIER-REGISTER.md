@@ -123,7 +123,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `release.settings` | `default` singleton | shipped | the newest-release check: enabled and interval |
 | `preview.gateway` | `default` singleton | shipped | ADR-060: the preview gateway address and its token (credential) |
 | `preview.camera` | operator-chosen | shipped | ADR-060: one RTSP camera; its URL is a credential |
-| `events.mqtt` | `default` singleton | reserved | ADR-067: publish coordinator events to one integration broker; `enabled`, `broker`, `topicPrefix`, all optional |
+| `events.mqtt` | `default` singleton | shipped | ADR-067: publish coordinator events to one integration broker; `enabled`, `broker`, `topicPrefix`, all optional |
 | `preview.ndi` | operator-chosen | shipped | ADR-060: one NDI source added by hand, by NDI name and optional address |
 | `dashboard.layout` | `default` singleton | shipped | ADR-060: the dashboard preview order and hidden tiles |
 
@@ -1671,9 +1671,9 @@ categories predate this section and are not yet listed.
 
 | Category | Status | Owner |
 |---|---|---|
-| `night.command.refused` | reserved | ADR-067: a night command was refused; the reason the operator saw |
-| `night.command.applied` | reserved | ADR-067: a night command was applied |
-| `night.readiness.completed` | reserved | ADR-067: Run readiness finished; outcome and failing checks |
+| `night.command.refused` | shipped | ADR-067: a night command was refused; the reason the operator saw |
+| `night.command.applied` | shipped | ADR-067: a night command was applied |
+| `night.readiness.completed` | shipped | ADR-067: Run readiness finished; outcome and failing checks |
 
 ## Research record numbers
 

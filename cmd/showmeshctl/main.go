@@ -108,6 +108,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdSystem(rest, stdout, stderr, clock)
 	case "release":
 		return cmdRelease(rest, stdout, stderr, clock)
+	case "events-mqtt":
+		return cmdEventsMQTT(rest, stdout, stderr, clock)
 	case "preview":
 		return cmdPreview(rest, stdout, stderr, clock)
 	case "version":
@@ -540,6 +542,9 @@ Commands:
   release settings set     change them (write); only the flags passed are changed
   release settings revisions
                            list every saved change, newest first
+  events-mqtt get          show where events are published: on or off, broker and topic prefix
+  events-mqtt set          change it (write); only the flags passed are changed
+  events-mqtt revisions    list every saved change, newest first
   preview list             the preview gateway state and every dashboard tile with its key
   preview snapshot <key> -o <file.jpg>
                            save the latest frame of one tile

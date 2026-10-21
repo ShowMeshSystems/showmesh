@@ -103,6 +103,8 @@ import type {
   ConfigEmergencyStopPayload,
   SitePowerConfigResponse,
   ConfigSitePowerPayload,
+  EventsMQTTConfigResponse,
+  ConfigEventsMQTTPutPayload,
   SitePowerRunResponse,
   ConfigWeatherDelayPayload,
   SetPrincipalPasswordRequest,
@@ -639,6 +641,14 @@ export function getSitePowerConfig(): Promise<SitePowerConfigResponse> {
 
 export function putSitePowerConfig(payload: ConfigSitePowerPayload): Promise<SitePowerConfigResponse> {
   return store.putSitePowerConfig(payload)
+}
+
+export function getEventsMQTTConfig(): Promise<EventsMQTTConfigResponse> {
+  return store.getEventsMQTTConfig()
+}
+
+export function putEventsMQTTConfig(payload: ConfigEventsMQTTPutPayload): Promise<EventsMQTTConfigResponse> {
+  return store.putEventsMQTTConfig(payload)
 }
 
 export function runSitePower(which: 'on' | 'off'): Promise<SitePowerRunResponse> {

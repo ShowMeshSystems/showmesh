@@ -2178,6 +2178,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/events.mqtt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where coordinator events are published
+         * @description Requires `config:write`. Whether the coordinator publishes its events and the night state to an integration broker, which broker, and under which topic prefix (ADR-067). Never `404`s: when nothing has been written, the payload is the default (off, prefix `showmesh`), reported with `revision` `0` and `source` `"default"`.
+         */
+        get: operations["getEventsMQTTConfig"];
+        /**
+         * Change where coordinator events are published
+         * @description Requires `config:write` (admin only). A partial update: a field left out keeps its stored value, and a `null` or unknown field is refused with `400`. `broker` must be one of the integration brokers the installer declared, and is required to turn publishing on. `topicPrefix` must be plain topic levels: no `+` or `#`, no leading or trailing `/`, no empty level. On success, appends a new immutable revision and activates it in the same transaction as its audit log entry (ADR-024 decision 11), and the running forwarder follows within a second with no restart. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *
+         *     Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
+         */
+        put: operations["putEventsMQTTConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/events.mqtt/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * events.mqtt revision history, newest first
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/release.settings/revisions`. `200` with an empty array when nothing has been written.
+         */
+        get: operations["getEventsMQTTConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/show.emergencystop": {
         parameters: {
             query?: never;
@@ -5635,12 +5681,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.mode/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, GET /config/audio.node/{id}/revisions, GET /config/fppconnect.settings/revisions, GET /config/release.settings/revisions, and GET /config/media.playlist/{id}/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, Track H seam H1 two more, ADR-033's show.mode one more, Track E phase 2 seam FC1a's fppconnect.settings one more, and media.playlist one more). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.mode/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, GET /config/audio.node/{id}/revisions, GET /config/fppconnect.settings/revisions, GET /config/release.settings/revisions, GET /config/events.mqtt/revisions, and GET /config/media.playlist/{id}/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, Track H seam H1 two more, ADR-033's show.mode one more, Track E phase 2 seam FC1a's fppconnect.settings one more, and media.playlist one more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "show.sitepower" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings" | "preview.gateway" | "preview.camera" | "preview.ndi" | "dashboard.layout";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "show.sitepower" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings" | "events.mqtt" | "preview.gateway" | "preview.camera" | "preview.ndi" | "dashboard.layout";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The "preview.gateway" kind's payload. `tokenSet` reports presence only: the gateway token never appears on any wire type. An empty `url` means previews are off. */
@@ -6337,6 +6383,34 @@ export interface components {
             kind: string;
             revision: number;
             payload: components["schemas"]["ConfigReleaseSettingsPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
+        /** @description The events.mqtt payload as a response carries it. */
+        ConfigEventsMQTTPayload: {
+            /** @description Whether the coordinator publishes events and the night state. */
+            enabled: boolean;
+            /** @description The id of the integration broker to publish to. Empty until one is picked. */
+            broker: string;
+            /** @description The first part of every topic published. `showmesh` until changed. */
+            topicPrefix: string;
+        };
+        /** @description The body PUT /config/events.mqtt accepts. Each field is optional: one left out keeps its stored value. A field that is present must not be `null`. */
+        ConfigEventsMQTTPutPayload: {
+            enabled?: boolean;
+            broker?: string;
+            topicPrefix?: string;
+        };
+        /** @description The body of GET and PUT /config/events.mqtt. `revision` `0` means nothing has been written and the payload is the default. */
+        EventsMQTTConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            revision: number;
+            payload: components["schemas"]["ConfigEventsMQTTPayload"];
             /** Format: date-time */
             updatedAt: string;
             createdByPrincipalId: string | null;
@@ -13757,6 +13831,101 @@ export interface operations {
         };
     };
     getReleaseSettingsConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getEventsMQTTConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventsMQTTConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putEventsMQTTConfig: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigEventsMQTTPutPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventsMQTTConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getEventsMQTTConfigRevisions: {
         parameters: {
             query?: never;
             header?: never;

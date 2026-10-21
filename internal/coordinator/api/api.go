@@ -2169,6 +2169,10 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/release.settings", h.writeGuard(&scopeConfigWrite, h.handlePutReleaseSettingsConfig))
 	mux.HandleFunc("GET /api/v1/config/release.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetReleaseSettingsConfigRevisions))
 
+	mux.HandleFunc("GET /api/v1/config/events.mqtt", h.requireScope(identity.ScopeConfigWrite, h.handleGetEventsMQTTConfig))
+	mux.HandleFunc("PUT /api/v1/config/events.mqtt", h.writeGuard(&scopeConfigWrite, h.handlePutEventsMQTTConfig))
+	mux.HandleFunc("GET /api/v1/config/events.mqtt/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetEventsMQTTConfigRevisions))
+
 	// Step 7 seam B: node discovery and declaration (RES-008
 	// D2/D6). All three are behind config:write — declaring what hardware
 	// exists is configuration, and ADR-024 decision 4 defines no narrower

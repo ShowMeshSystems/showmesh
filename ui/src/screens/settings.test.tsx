@@ -176,7 +176,7 @@ describe('Settings tab strip', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Settings tabs' })
     const tabs = within(nav).getAllByRole('link')
-    expect(tabs).toHaveLength(14)
+    expect(tabs).toHaveLength(15)
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Connections',
       'Content delivery',
@@ -184,6 +184,7 @@ describe('Settings tab strip', () => {
       'Weather delay',
       'Emergency stop',
       'Site settings',
+      'Home Assistant',
       'Brightness',
       'Dashboard',
       'Appearance',

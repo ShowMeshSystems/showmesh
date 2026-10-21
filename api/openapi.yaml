@@ -118,18 +118,18 @@ info:
     each of their `{id}`
     paths carries a `DELETE` operation: a tombstone, not a hard delete, so
     `config_revisions` stays immutable and readable through that kind's own
-    `/revisions` path afterward (ADR-009). The fifteen remaining
+    `/revisions` path afterward (ADR-009). The sixteen remaining
     configuration kinds, `assets.settings`, `audio.settings`,
     `show.emergencystop`, `fppconnect.settings`, `fpp.endpoints`,
     `fpp.mqtt`, `night.session.active`, `release.settings`,
-    `preview.gateway`, `dashboard.layout`,
+    `events.mqtt`, `preview.gateway`, `dashboard.layout`,
     `render.settings`,
     `resolume.instances`, `resolume.recovery`, `show.active`, and
     `show.mode`, are singletons: one fixed id per installation holding
     either a settings blob or a whole list as one object. None of them
     carries a `DELETE` operation. A singleton configuration object is
     emptied or reset through its own `PUT`, never deleted; `DELETE` against
-    any of these fifteen paths returns `405 Method Not Allowed` with an
+    any of these sixteen paths returns `405 Method Not Allowed` with an
     `Allow` header naming the methods that path actually serves, the
     identical contract this document already states for every other route
     with no `DELETE` of its own.
@@ -6454,6 +6454,121 @@ paths:
       description: >-
         Requires `config:write`. Metadata only, mirroring
         `GET /config/assets.settings/revisions`. `200` with an empty
+        array when nothing has been written.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/events.mqtt:
+    get:
+      operationId: getEventsMQTTConfig
+      summary: Where coordinator events are published
+      description: >-
+        Requires `config:write`. Whether the coordinator publishes its
+        events and the night state to an integration broker, which broker,
+        and under which topic prefix (ADR-067). Never `404`s: when nothing
+        has been written, the payload is the default (off, prefix
+        `showmesh`), reported with `revision` `0` and `source` `"default"`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventsMQTTConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putEventsMQTTConfig
+      summary: Change where coordinator events are published
+      description: >-
+        Requires `config:write` (admin only). A partial update: a field
+        left out keeps its stored value, and a `null` or unknown field is
+        refused with `400`. `broker` must be one of the integration brokers
+        the installer declared, and is required to turn publishing on.
+        `topicPrefix` must be plain topic levels: no `+` or `#`, no leading
+        or trailing `/`, no empty level. On success, appends a new immutable
+        revision and activates it in the same transaction as its audit log
+        entry (ADR-024 decision 11), and the running forwarder follows
+        within a second with no restart. A cookie-authenticated request
+        additionally requires `Sec-Fetch-Site: same-origin` (ADR-024
+        decision 6); a bearer-token-authenticated request is exempt.
+
+
+        Optionally carries `If-Match`/`If-None-Match` (opt-in; see those
+        parameters): refused with `409` when the precondition names a
+        revision that is no longer current.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigEventsMQTTPutPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventsMQTTConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/events.mqtt/revisions:
+    get:
+      operationId: getEventsMQTTConfigRevisions
+      summary: events.mqtt revision history, newest first
+      description: >-
+        Requires `config:write`. Metadata only, mirroring
+        `GET /config/release.settings/revisions`. `200` with an empty
         array when nothing has been written.
       responses:
         "200":
@@ -15991,7 +16106,8 @@ components:
         /config/audio.settings/revisions, GET
         /config/audio.node/{id}/revisions, GET
         /config/fppconnect.settings/revisions, GET
-        /config/release.settings/revisions, and GET
+        /config/release.settings/revisions, GET
+        /config/events.mqtt/revisions, and GET
         /config/media.playlist/{id}/revisions, newest first - one shape
         shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
@@ -16009,7 +16125,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, show.sitepower, media.playlist, node.clock, show.weatherdelay, release.settings, preview.gateway, preview.camera, preview.ndi, dashboard.layout]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop, show.sitepower, media.playlist, node.clock, show.weatherdelay, release.settings, events.mqtt, preview.gateway, preview.camera, preview.ndi, dashboard.layout]
         revisions:
           type: array
           items:
@@ -17624,6 +17740,60 @@ components:
           type: integer
         payload:
           $ref: "#/components/schemas/ConfigReleaseSettingsPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+    ConfigEventsMQTTPayload:
+      type: object
+      description: The events.mqtt payload as a response carries it.
+      required: [enabled, broker, topicPrefix]
+      properties:
+        enabled:
+          type: boolean
+          description: Whether the coordinator publishes events and the night state.
+        broker:
+          type: string
+          description: The id of the integration broker to publish to. Empty until one is picked.
+        topicPrefix:
+          type: string
+          description: The first part of every topic published. `showmesh` until changed.
+    ConfigEventsMQTTPutPayload:
+      type: object
+      description: >-
+        The body PUT /config/events.mqtt accepts. Each field is optional:
+        one left out keeps its stored value. A field that is present must
+        not be `null`.
+      properties:
+        enabled:
+          type: boolean
+        broker:
+          type: string
+        topicPrefix:
+          type: string
+    EventsMQTTConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/events.mqtt. `revision` `0` means
+        nothing has been written and the payload is the default.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigEventsMQTTPayload"
         updatedAt:
           type: string
           format: date-time
