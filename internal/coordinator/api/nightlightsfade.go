@@ -34,6 +34,10 @@ const (
 	// interval after the window, for as long as it is the newest write.
 	nightLightsSlowRetry = 30 * time.Second
 
+	// The resting start waits at most this long for the lights and projections to go dark.
+	nightRestingDarkCap  = 3 * time.Second
+	nightLightsDarkRetry = 500 * time.Millisecond
+
 	nightEventCategoryLightsGainFailed = "night.lights.gain_failed"
 )
 
@@ -57,7 +61,9 @@ type nightLightsStep struct {
 	endsAt     time.Time
 	instances  []string
 	oneShot    bool
+	retryEvery time.Duration
 	retryUntil time.Time
+	startedAt  time.Time
 	cancelled  bool
 	inst       map[string]*nightLightsInstanceState
 }
@@ -216,6 +222,7 @@ func nightTransitionLeadMs(p config.NightSessionPayload) int64 {
 func (h *handlers) nightLightsStart(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload, st nightLightsStep) {
 	st.key = nightLightsKey(rec, st.step)
 	st.rec = rec
+	st.startedAt = now
 	st.instances = h.nightLightsInstances(ctx)
 	st.inst = map[string]*nightLightsInstanceState{}
 	for _, id := range st.instances {
@@ -303,6 +310,9 @@ func (h *handlers) nightLightsLaunchDue(ctx context.Context, now time.Time, st *
 			late := now.After(st.retryUntil)
 			if is.attempts > 0 {
 				interval := nightLightsRetryBackoff
+				if st.retryEvery > 0 {
+					interval = st.retryEvery
+				}
 				switch {
 				case st.oneShot:
 					continue
@@ -363,6 +373,9 @@ func (h *handlers) nightLightsWrite(ctx context.Context, st *nightLightsStep, in
 		}
 	}
 	l.mu.Unlock()
+	if err == nil && st.step == nightLightsStepDark {
+		h.nightWakeLoop()
+	}
 	if err != nil {
 		h.logWarn("night loop: lights fade write failed", "sessionId", st.rec.ID, "instanceId", instanceID, "step", st.step, "error", err)
 		h.nightReportLights(ctx, st.rec, st.step, instanceID, err.Error())
@@ -464,8 +477,8 @@ func (h *handlers) nightRestoreShowGain(ctx context.Context, now time.Time, rec 
 	h.nightLightsStart(ctx, now, rec, payload, nightLightsStep{step: nightLightsStepShowGain, target: 100})
 }
 
-// nightLightsFadeInDark sets the gain to 0 before the resting playlist starts
-// after a show, so the fade-in rises from dark. It is tried once.
+// nightLightsFadeInDark sets the gain to 0 as soon as a show ends, so the
+// fade-in rises from dark. It retries until it lands or the cap passes.
 func (h *handlers) nightLightsFadeInDark(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) {
 	if nightRenderFadeInMs(payload) != nil {
 		h.nightRenderFade(ctx, now, rec, "dark", 0, time.Time{}, time.Time{}, 0)
@@ -473,7 +486,46 @@ func (h *handlers) nightLightsFadeInDark(ctx context.Context, now time.Time, rec
 	if payload.LightsFadeInMs == nil {
 		return
 	}
-	h.nightLightsStart(ctx, now, rec, payload, nightLightsStep{step: nightLightsStepDark, target: 0, oneShot: true})
+	h.nightLightsStart(ctx, now, rec, payload, nightLightsStep{
+		step: nightLightsStepDark, target: 0, retryEvery: nightLightsDarkRetry, retryUntil: now.Add(nightRestingDarkCap),
+	})
+}
+
+// darkSettled reports whether the dark step reached every player that did not
+// yield it, and whether the cap passed first. A missing step has nothing to wait for.
+func (l *nightLightsGainLog) darkSettled(rec store.NightSessionRecord, now time.Time) (settled, capped bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	st := l.session(rec.ID).steps[nightLightsKey(rec, nightLightsStepDark)]
+	if st == nil {
+		return true, false
+	}
+	for _, id := range st.instances {
+		if is := st.inst[id]; !is.done && !is.yielded {
+			return false, now.Sub(st.startedAt) >= nightRestingDarkCap
+		}
+	}
+	return true, false
+}
+
+// nightRestingDarkSettled reports whether the resting start may go: the dark
+// step is done everywhere, or the cap passed. It never waits.
+func (h *handlers) nightRestingDarkSettled(now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) bool {
+	lights, lightsCapped := true, false
+	if payload.LightsFadeInMs != nil {
+		lights, lightsCapped = h.lights().darkSettled(rec, now)
+	}
+	render, renderCapped := true, false
+	if nightRenderFadeInMs(payload) != nil {
+		render, renderCapped = h.nightRenderFadeSettled(rec, "dark", now, nightRestingDarkCap)
+	}
+	if (lights || lightsCapped) && (render || renderCapped) {
+		if lightsCapped || renderCapped {
+			h.logWarn("night loop: the lights or projections did not go dark in time, starting resting anyway", "sessionId", rec.ID, "cycle", rec.Cycle, "lightsCapped", lightsCapped, "projectionsCapped", renderCapped)
+		}
+		return true
+	}
+	return false
 }
 
 // nightLightsFadeIn starts the fade-in once the resting start is dispatched,

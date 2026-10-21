@@ -1069,6 +1069,11 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 		cur.BoundaryJSON = ""
 		return cur
 	})
+	if rec.ShutdownIntent == "" {
+		if payload, err := h.getPinnedNightSessionPayload(ctx, rec); err == nil {
+			h.nightLightsFadeInDark(ctx, now, rec, payload)
+		}
+	}
 	h.nightWakeLoop()
 }
 
@@ -1202,6 +1207,7 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 	// below: unlike enter-show, no atomic commit boundary or barrier gates
 	// entry into resting on their outcome (RESTING-MODE.md §7.2's ordering
 	// note: "show completion remains the authoritative anchor").
+	h.nightLightsFadeInDark(ctx, now, rec, payload)
 	phase, cues, holdMs := nightEnterRestingCues(rec, payload)
 	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, phase, cues, payload)
 
@@ -1209,7 +1215,10 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 	if now.Sub(rec.StateEnteredAt) < hold {
 		return
 	}
-	h.nightLightsFadeInDark(ctx, now, rec, payload)
+	// Resting starts once the lights and projections are dark, or the cap passed; a later tick re-checks.
+	if anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON); (!has || anchor.DispatchedAt.IsZero()) && !h.nightRestingDarkSettled(now, rec, payload) {
+		return
+	}
 
 	if rec.FinalShowRequested {
 		anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingRepeat, payload.Resting.FPPInstanceID, payload.Resting.EndOfNightPlaylist, payload.Resting.EndOfNightRepeat, 0, fppIfBusyRefuse)
