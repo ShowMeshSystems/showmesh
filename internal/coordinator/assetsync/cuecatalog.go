@@ -104,7 +104,7 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
 	}
 
-	testTriggers, err := sequenceTestTriggers(ctx, st, showID)
+	testTriggers, err := sequenceTestTriggers(ctx, st, showID, nodeID)
 	if err != nil {
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
 	}

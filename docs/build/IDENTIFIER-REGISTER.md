@@ -422,6 +422,7 @@ above was added for.
 | `audio.transition.sequential` | shipped | Lane 17a SM-201 |
 | `audio.transition.gapless` | reserved | Lane 17a SM-201 |
 | `audio.transition.crossfade` | reserved | Lane 17a SM-201 |
+| `cue.testtriggers` | shipped | ADR-067: the agent honors a cue catalog's `testTriggers`. Version 1, no attributes. The coordinator leaves test mappings out of the catalog for a node that does not advertise it |
 
 **`audio.playback`, `audio.multichannel`, `audio.dante` and
 `timecode.ltc.generate` are withdrawn**, recorded in `withdrawnIDs` and

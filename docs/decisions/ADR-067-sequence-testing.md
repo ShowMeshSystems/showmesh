@@ -27,8 +27,8 @@ that only Cues a show playlist references reach a node's catalog, and
 2. The list runs only while its show is the active show and no night session
    is open (a current night session in any state other than `inactive` or
    `stopped`). It stays editable at any time.
-3. A test mapping is a second way a Cue reaches nodes. The catalog always
-   includes the mapped Cue and lists the mapped filenames in that Cue's
+3. A test mapping is a second way a Cue reaches nodes. The catalog of a node
+   that advertises `cue.testtriggers` always includes the mapped Cue and lists the mapped filenames in that Cue's
    `testTriggers`, separate from `triggers`, whether or not a night session
    is open, so opening or closing a night never changes the catalog. A
    test-only Cue takes no part in catalog claim conflicts, because FPP plays
@@ -65,8 +65,11 @@ not a playback-derived "is a show running" flag, which
 - Opening or closing a night needs no catalog redeploy, so a deploy held
   while FPP plays cannot leave nodes on a stale catalog.
 - An agent older than this ADR drops `testTriggers` when it decodes a
-  catalog, so its computed revision disagrees and it refuses a catalog that
-  carries any test mapping. A catalog without test mappings omits the field
-  and keeps the revision older agents compute.
+  catalog, so its computed revision disagrees and it would refuse a catalog
+  that carries any test mapping. An agent that does not advertise the
+  `cue.testtriggers` capability therefore gets no test mappings, neither
+  `testTriggers` nor test-only Cues, so the coordinator can be upgraded before
+  the agents safely. A catalog without test mappings omits the field and keeps
+  the revision older agents compute.
 - Editing the test list while show mode holds a pin behaves like any other
   catalog edit made then.

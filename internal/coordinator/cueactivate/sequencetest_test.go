@@ -8,6 +8,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
 
 func putSequenceTest(t *testing.T, st *store.Store, showID string, entries ...config.SequenceTestEntry) {
@@ -35,6 +36,9 @@ func sequenceTestFixture(t *testing.T) (*store.Store, fppreconcile.Result, store
 	putLTCCue(t, st, "cue-test", "show-1")
 	putAudioNode(t, st, "node-1")
 	declareNode(t, st, "node-1")
+	if err := st.UpsertHello(context.Background(), "node-1", store.HelloRecord{Label: "node-1", Capabilities: capability.Set{{ID: capability.CueTestTriggers, Version: 1}}, Provenance: store.ProvenanceAgentReport}); err != nil {
+		t.Fatalf("upsert hello: %v", err)
+	}
 	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
 	putSequenceTest(t, st, "show-1", config.SequenceTestEntry{SequenceFilename: "Test.fseq", Cue: "cue-test"})
 	result := fppreconcile.Result{
@@ -72,6 +76,19 @@ func TestDecideSequenceTestAppliesWithNoBindingAtAll(t *testing.T) {
 	}
 	if dec.State != StateActivated || dec.Activations["node-1"].CueID != "cue-test" {
 		t.Fatalf("Decision = %+v, want cue-test activated", dec)
+	}
+}
+
+func TestDecideSequenceTestFallsThroughWhenNoNodeAdvertisesTheCapability(t *testing.T) {
+	st, result, obs := sequenceTestFixture(t)
+	declareNode(t, st, "node-1")
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateMismatched || len(dec.Activations) != 0 {
+		t.Fatalf("Decision = %+v, want the playlist's mismatch with no activations", dec)
 	}
 }
 

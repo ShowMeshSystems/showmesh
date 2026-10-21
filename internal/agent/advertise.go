@@ -148,6 +148,7 @@ func publishHello(ctx context.Context, pub Publisher, cfg config.Config, bootID 
 	if err != nil {
 		return 0, fmt.Errorf("building hello topic: %w", err)
 	}
+	caps = withSoftwareCapabilities(caps)
 
 	env, err := mqttproto.NewHelloEnvelope(time.Now, cfg.NodeID, mqttproto.HelloPayload{
 		Label:           cfg.NodeLabel,

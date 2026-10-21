@@ -9,6 +9,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
 
 // Night session states in which no night is open (the api package's own
@@ -59,9 +60,22 @@ func SequenceTestMappings(ctx context.Context, st *store.Store, showID string) (
 	return out, nil
 }
 
-// sequenceTestTriggers returns Cue -> mapped filenames for showID. The
-// catalog carries them whether or not a night is open; nodes gate them.
-func sequenceTestTriggers(ctx context.Context, st *store.Store, showID string) (map[string][]string, error) {
+// sequenceTestTriggers returns Cue -> mapped filenames for showID, empty for a
+// node that does not advertise [capability.CueTestTriggers]. Nodes gate the night.
+func sequenceTestTriggers(ctx context.Context, st *store.Store, showID, nodeID string) (map[string][]string, error) {
+	rec, err := st.GetNode(ctx, nodeID)
+	if errors.Is(err, store.ErrNodeNotFound) {
+		return map[string][]string{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get node %q: %w", nodeID, err)
+	}
+	if rec.Hello == nil {
+		return map[string][]string{}, nil
+	}
+	if _, ok := rec.Hello.Capabilities.Lookup(capability.CueTestTriggers); !ok {
+		return map[string][]string{}, nil
+	}
 	mappings, err := SequenceTestMappings(ctx, st, showID)
 	if err != nil {
 		return nil, err
