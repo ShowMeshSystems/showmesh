@@ -88,7 +88,7 @@ func TestAgentAppearsInInventoryWithCapabilities(t *testing.T) {
 		t.Errorf("Label = %q, want %q", *view.Label, "integration test node")
 	}
 
-	wantVersions := map[string]int{"matrix.render": 2, "display.hdmi": 1}
+	wantVersions := map[string]int{"matrix.render": 2, "display.hdmi": 1, "cue.testtriggers": 1}
 	if len(view.Capabilities) != len(wantVersions) {
 		t.Fatalf("Capabilities = %+v, want %d entries", view.Capabilities, len(wantVersions))
 	}
