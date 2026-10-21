@@ -2269,6 +2269,8 @@ coordinator's Ed25519 public key (§5.13). Pairing delivers that key
 
 **Status: coordinator BUILT, plugin command unbuilt.**
 
+Coordinator anchor: `ScopeShowActionInvoke`
+
 The plugin's "ShowMesh: Run Action" FPP command calls
 `POST /api/v1/actions/{id}/invocations`. That route is guarded by
 `show:action:invoke`, so the `scheduler` role, which is the installed plugin
