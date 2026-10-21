@@ -103,6 +103,8 @@ import type {
   ConfigEmergencyStopPayload,
   SitePowerConfigResponse,
   ConfigSitePowerPayload,
+  SequenceTestConfigResponse,
+  ConfigSequenceTestPayload,
   SitePowerRunResponse,
   ConfigWeatherDelayPayload,
   SetPrincipalPasswordRequest,
@@ -639,6 +641,14 @@ export function getSitePowerConfig(): Promise<SitePowerConfigResponse> {
 
 export function putSitePowerConfig(payload: ConfigSitePowerPayload): Promise<SitePowerConfigResponse> {
   return store.putSitePowerConfig(payload)
+}
+
+export function getSequenceTestConfig(showId: string): Promise<SequenceTestConfigResponse> {
+  return store.getSequenceTestConfig(showId)
+}
+
+export function putSequenceTestConfig(showId: string, payload: ConfigSequenceTestPayload): Promise<SequenceTestConfigResponse> {
+  return store.putSequenceTestConfig(showId, payload)
 }
 
 export function runSitePower(which: 'on' | 'off'): Promise<SitePowerRunResponse> {

@@ -116,7 +116,7 @@ describe('Shows workspace shell', () => {
     vi.restoreAllMocks()
   })
 
-  it('lists all six tabs, Media playlists folded into Playlists, with none marked as still queued', async () => {
+  it('lists all seven tabs, Media playlists folded into Playlists, with none marked as still queued', async () => {
     stubs.getShow = showHead
     stubs.listConfigObjects = () => contentsEmpty()
     stubs.listAssets = assetsEmpty
@@ -125,10 +125,10 @@ describe('Shows workspace shell', () => {
     const nav = screen.getByRole('navigation', { name: 'Show workspace tabs' })
     const tabs = within(nav).getAllByRole('link')
     expect(tabs.map((t) => t.textContent?.replace(/\d+/, '').trim())).toEqual(
-      expect.arrayContaining(['Playlists', 'Cues', 'Assets', 'Presentation', 'Automation', 'Night session']),
+      expect.arrayContaining(['Playlists', 'Cues', 'Assets', 'Presentation', 'Automation', 'Sequence testing', 'Night session']),
     )
     expect(tabs.map((t) => t.textContent)).not.toEqual(expect.arrayContaining([expect.stringContaining('Media playlists')]))
-    expect(tabs).toHaveLength(6)
+    expect(tabs).toHaveLength(7)
     expect(within(nav).queryAllByText('Soon')).toHaveLength(0)
   })
 

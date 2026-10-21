@@ -2268,6 +2268,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/show.sequencetest/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The show id. Each show has at most one sequence test list. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * A show's sequence test list (ADR-067)
+         * @description Requires `show:macro:run` or `config:write`. Never `404`s: with nothing written it answers `revision` `0`, `source` `"default"` and no entries. `running` is true only while this show is the active show and no night session is open; otherwise `notRunningReason` says why.
+         */
+        get: operations["getSequenceTestConfig"];
+        /**
+         * Set a show's sequence test list
+         * @description Requires `config:write`. A full replacement. While this show is active and no night session is open, FPP playing a listed sequence file runs the mapped Cue in full, and nodes receive the file name as a trigger of that Cue. Every Cue must belong to the show. A file name already played by a different Cue, from a playlist entry of the show or another row, is refused. Optionally carries `If-Match`/`If-None-Match`.
+         */
+        put: operations["putSequenceTestConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/site-power/on": {
         parameters: {
             query?: never;
@@ -6283,6 +6310,35 @@ export interface components {
             /** Format: int64 */
             revision: number;
             payload: components["schemas"]["ConfigSitePowerPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
+        ConfigSequenceTestEntry: {
+            /** @description The FPP sequence file name, without a directory. */
+            sequenceFilename: string;
+            /** @description A show.cue id of the same show. */
+            cue: string;
+        };
+        /** @description The show.sequencetest payload. `show` may be omitted on write and defaults to the path id. */
+        ConfigSequenceTestPayload: {
+            show: string;
+            entries: components["schemas"]["ConfigSequenceTestEntry"][];
+        };
+        SequenceTestConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            id: string;
+            /** Format: int64 */
+            revision: number;
+            payload: components["schemas"]["ConfigSequenceTestPayload"];
+            /** @description Whether the list runs now. True only while this show is active and no night session is open. */
+            running: boolean;
+            /** @description Why the list does not run now. Absent when running is true. */
+            notRunningReason?: string;
             /** Format: date-time */
             updatedAt: string;
             createdByPrincipalId: string | null;
@@ -13959,6 +14015,74 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getSequenceTestConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The show id. Each show has at most one sequence test list. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SequenceTestConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putSequenceTestConfig: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path: {
+                /** @description The show id. Each show has at most one sequence test list. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigSequenceTestPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SequenceTestConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

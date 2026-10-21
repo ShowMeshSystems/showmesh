@@ -118,6 +118,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `node.clock` | operator-chosen (the node id) | reserved | Track I seam I1 |
 | `show.emergencystop` | `default` singleton | shipped | Lane 17a SM-129 |
 | `show.sitepower` | `default` singleton | reserved | ADR-065: global shutdown sequences and the power-on action list |
+| `show.sequencetest` | the show id | shipped | ADR-067: FPP sequence filename to Cue mappings that run outside a night session |
 | `show.weatherdelay` | `default` singleton | shipped | ADR-053 weather delay: the alert assets and repeat count, the target nodes, the operator-defined power groups and their optional heartbeat, the trigger sources and their answer windows. Every field optional |
 | `media.playlist` | operator-chosen | shipped | SM-524 / SM-457 |
 | `release.settings` | `default` singleton | shipped | the newest-release check: enabled and interval |
