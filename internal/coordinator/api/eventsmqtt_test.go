@@ -213,7 +213,7 @@ func TestEventsMQTTForwarderPublishesTheNightStateRetainedOnceUntilItChanges(t *
 	}
 }
 
-func TestEventsMQTTForwarderOneFailedPublishDoesNotStopTheNext(t *testing.T) {
+func TestEventsMQTTForwarderFailedPublishDropsTheBatchAndTheNextBatchIsSent(t *testing.T) {
 	api, _, deps, admin := eventsMQTTTestAPI(t, nil)
 	putEventsMQTT(t, api, admin, `{"enabled":true,"broker":"ha"}`)
 	events := &scriptedEvents{}
@@ -224,20 +224,21 @@ func TestEventsMQTTForwarderOneFailedPublishDoesNotStopTheNext(t *testing.T) {
 	f.tick(ctx)
 	events.records = []EventRecord{scriptedRecord(1, "first"), scriptedRecord(2, "second")}
 	f.tick(ctx)
-
-	var sawSecond bool
-	for _, topic := range brokers.topics() {
-		sawSecond = sawSecond || topic == "showmesh/events/second"
-	}
-	if !sawSecond {
-		t.Fatalf("topics published = %v, want the second event sent after the first was dropped", brokers.topics())
-	}
 	brokers.failFor = nil
+	events.records = append(events.records, scriptedRecord(3, "third"))
 	f.tick(ctx)
+
+	var sawThird bool
 	for _, topic := range brokers.topics() {
-		if topic == "showmesh/events/first" {
-			t.Fatalf("a dropped event was sent again")
+		switch topic {
+		case "showmesh/events/first", "showmesh/events/second":
+			t.Fatalf("topics published = %v, want the failed batch dropped and never resent", brokers.topics())
+		case "showmesh/events/third":
+			sawThird = true
 		}
+	}
+	if !sawThird {
+		t.Fatalf("topics published = %v, want the event recorded after the broker came back", brokers.topics())
 	}
 }
 

@@ -139,7 +139,7 @@ The **Current state** block at the top of this file is overwritten each session:
 
 - Config kind `events.mqtt` (`enabled`, `broker`, `topicPrefix`) with GET, PUT and revisions in `api/openapi.yaml`, `internal/coordinator/config/eventsmqtt.go` and `internal/coordinator/api/eventsmqttconfig.go`. A broker that is not a declared integration broker is refused, as is a prefix with `+`, `#` or a stray `/`.
 - Night events in `internal/coordinator/api/nightevents.go`: `night.command.refused`, `night.command.applied` and `night.readiness.completed`. Readiness is recorded in the same transaction as its result, including the automatic rerun inside Start night.
-- Forwarder `internal/coordinator/api/eventsmqttforwarder.go`: follows the event history by sequence number from the latest row at startup, publishes each row on `<prefix>/events/<category>` at QoS 1 and the night state retained on `<prefix>/night/state`, through the integration broker registry only.
+- Forwarder `internal/coordinator/api/eventsmqttforwarder.go`: follows the event history by sequence number from the latest row at startup, publishes each row on `<prefix>/events/<category>` at QoS 1 and the night state retained on `<prefix>/night/state`, through the integration broker registry only. A failed publish drops the rest of that batch, so a broker that is down costs one five-second wait per poll.
 - `showmeshctl events-mqtt get|set|revisions` and a Settings tab, Home Assistant, built from the existing kit.
 
 **Decisions made:** none beyond ADR-067. The state payload nests readiness as `readiness.outcome` and `readiness.completedAt`.

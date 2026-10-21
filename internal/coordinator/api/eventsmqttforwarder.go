@@ -82,12 +82,15 @@ func (f *EventsMQTTForwarder) forwardEvents(ctx context.Context, s config.Events
 		f.warn("events mqtt: list events failed", "error", err)
 		return
 	}
-	for _, rec := range records {
+	for i, rec := range records {
 		ev := mapEvent(rec)
 		if payload, merr := json.Marshal(ev); merr != nil {
 			f.warn("events mqtt: encode event failed", "seq", rec.Seq, "error", merr)
 		} else if perr := f.publish(ctx, s.Broker, s.TopicPrefix+"/events/"+rec.Category, eventsMQTTEventQoS, false, payload); perr != nil {
-			f.h.logWarn("events mqtt: dropped an event", "seq", rec.Seq, "category", rec.Category, "error", perr)
+			// One failed publish drops the rest of the batch, so a down broker costs one wait per tick, not one per event.
+			f.warn("events mqtt: dropped events while the broker was unreachable", "fromSeq", rec.Seq, "count", len(records)-i, "error", perr)
+			f.cursor = max(f.cursor, records[len(records)-1].Seq)
+			break
 		}
 		f.cursor = max(f.cursor, rec.Seq)
 	}
