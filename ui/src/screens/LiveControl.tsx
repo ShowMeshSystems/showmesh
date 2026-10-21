@@ -110,6 +110,7 @@ import {
   type CommandOutcome,
   type StartPlaylistConflictReason,
 } from './liveControlModel'
+import { usePowerDownConfirm } from './usePowerDownConfirm'
 import { usePrepareSiteConfirm } from './usePrepareSiteConfirm'
 
 /** Kept apart from the generic Refused outcome: the busy guard needs a distinct render and its own "start anyway" CTA. */
@@ -411,13 +412,14 @@ export function LiveControl() {
   )
 
   const night = useCallback(
-    (command: NightCommandName, stopFppPlayback?: boolean) => {
+    (command: NightCommandName, stopFppPlayback?: boolean, force?: boolean) => {
       dispatchNightCommand(
         command,
         command === 'prepare-site' ? prepareSiteKey : undefined,
         undefined,
         command === 'start-night' ? skipEnterShowLead : undefined,
         command === 'prepare-site' ? stopFppPlayback : undefined,
+        command === 'power-down-presentation' ? force : undefined,
       )
         .then((response) => {
           if (command === 'start-night') setSkipEnterShowLead(false)
@@ -438,6 +440,7 @@ export function LiveControl() {
   )
 
   const prepareSite = usePrepareSiteConfirm((stop) => night('prepare-site', stop))
+  const powerDown = usePowerDownConfirm((force) => night('power-down-presentation', undefined, force))
 
   const state = instance === undefined ? null : transportState(instance)
   const rows = [...outputRows(model, nowIso), ...audioRows(model, nowIso)]
@@ -853,10 +856,17 @@ export function LiveControl() {
       <Section id="lc-lifecycle" title="Night lifecycle" aside={<Link to="/night">Show Night →</Link>}>
         <LifecycleCommands
           groups={nightLifecycleGroups(nightGate, (command) =>
-            command === 'start-night' ? setStartNightConfirmOpen(true) : command === 'prepare-site' ? prepareSite.start() : night(command),
+            command === 'start-night'
+              ? setStartNightConfirmOpen(true)
+              : command === 'prepare-site'
+                ? prepareSite.start()
+                : command === 'power-down-presentation'
+                  ? powerDown.start()
+                  : night(command),
           )}
         />
         {prepareSite.dialog}
+        {powerDown.dialog}
         <SitePowerTesting />
         <ConfirmDialog
           open={startNightConfirmOpen}

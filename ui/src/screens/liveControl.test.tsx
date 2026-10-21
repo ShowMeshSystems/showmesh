@@ -795,6 +795,32 @@ describe('Live Control', () => {
     expect(calls[0]?.[4]).toBe(true)
   })
 
+  it('opens a Power down dialog before sending, and sends force only when Force is checked', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: never[]) => {
+      calls.push(args as unknown[])
+      return new Promise(() => {})
+    }
+    renderScreen({ session: nightCommandSession })
+    const region = screen.getByRole('region', { name: 'Night lifecycle' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Power down presentation' }))
+    expect(calls).toHaveLength(0)
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    expect(calls).toHaveLength(0)
+
+    fireEvent.click(within(region).getByRole('button', { name: 'Power down presentation' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByRole('checkbox', { name: 'Force' })).not.toBeChecked()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Power down' }))
+    expect(calls[0]?.[0]).toBe('power-down-presentation')
+    expect(calls[0]?.[5]).toBe(false)
+
+    fireEvent.click(within(region).getByRole('button', { name: 'Power down presentation' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('checkbox', { name: 'Force' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Power down' }))
+    expect(calls[1]?.[5]).toBe(true)
+  })
+
   it('says an unconfirmed command was not confirmed', () => {
     const result = {
       outcome: 'unconfirmed',

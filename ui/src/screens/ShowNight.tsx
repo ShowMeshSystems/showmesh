@@ -97,6 +97,7 @@ import {
   type NightCommandOutcome,
   type RailStep,
 } from './showNightModel'
+import { usePowerDownConfirm } from './usePowerDownConfirm'
 import { usePrepareSiteConfirm } from './usePrepareSiteConfirm'
 
 function useNightSession(): { session: NightSessionState | null; error: string | null } {
@@ -183,11 +184,12 @@ export function ShowNight() {
   const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
   const [stopFppPlayback, setStopFppPlayback] = useState(false)
+  const [powerDownForce, setPowerDownForce] = useState(false)
   const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
   const [activationOpen, setActivationOpen] = useState(false)
 
   const send = useCallback(
-    (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[], stopOverride?: boolean) => {
+    (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[], stopOverride?: boolean, forceOverride?: boolean) => {
       const idempotencyKey = command === 'prepare-site' ? prepareSiteKey : undefined
       setOutcome(sentOutcome(command))
       dispatchNightCommand(
@@ -196,6 +198,7 @@ export function ShowNight() {
         interlockOverrides,
         command === 'start-night' ? skipEnterShowLead : undefined,
         command === 'prepare-site' ? (stopOverride ?? stopFppPlayback) : undefined,
+        command === 'power-down-presentation' ? (forceOverride ?? powerDownForce) : undefined,
       )
         .then((response) => {
           setWithheld(null)
@@ -224,12 +227,17 @@ export function ShowNight() {
           setOutcome({ tone, label, lines: [describeApiError(err)], blocked })
         })
     },
-    [prepareSiteKey, skipEnterShowLead, stopFppPlayback],
+    [prepareSiteKey, skipEnterShowLead, stopFppPlayback, powerDownForce],
   )
 
   const prepareSite = usePrepareSiteConfirm((stop) => {
     setStopFppPlayback(stop)
     send('prepare-site', undefined, stop)
+  })
+
+  const powerDown = usePowerDownConfirm((force) => {
+    setPowerDownForce(force)
+    send('power-down-presentation', undefined, undefined, force)
   })
 
   const submitOverride = useCallback(() => {
@@ -543,12 +551,14 @@ export function ShowNight() {
               commands: nightLifecycleGroups(gate, (command) => {
                 if (command === 'start-night') setStartNightConfirmOpen(true)
                 else if (command === 'prepare-site') prepareSite.start()
+                else if (command === 'power-down-presentation') powerDown.start()
                 else send(command)
               }).flatMap((group) => group.commands),
             },
           ]}
         />
         {prepareSite.dialog}
+        {powerDown.dialog}
         <SitePowerTesting />
         <ConfirmDialog
           open={startNightConfirmOpen}

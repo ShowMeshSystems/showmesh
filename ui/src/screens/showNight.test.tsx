@@ -624,6 +624,53 @@ describe('Show Night', () => {
     expect(calls[0]?.[4]).toBeUndefined()
   })
 
+  it('opens a confirm dialog for power down with Force unchecked, and sends no force by default', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    expect(calls).toHaveLength(0)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByRole('checkbox', { name: 'Force' })).not.toBeChecked()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Power down' }))
+    expect(calls[0]?.[0]).toBe('power-down-presentation')
+    expect(calls[0]?.[5]).toBe(false)
+  })
+
+  it('sends force for power down only when Force is checked, sends nothing on cancel, and unchecks it for the next press', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    expect(calls).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('checkbox', { name: 'Force' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Power down' }))
+    expect(calls[0]?.[5]).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    expect(within(screen.getByRole('dialog')).getByRole('checkbox', { name: 'Force' })).not.toBeChecked()
+  })
+
+  it('never sends force for a command other than power down', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'End session' }))
+    expect(calls[0]?.[5]).toBeUndefined()
+  })
+
   it('reuses the same idempotencyKey across a double press of prepare-site', () => {
     const calls: unknown[][] = []
     stubs.dispatchNightCommand = (...args: unknown[]) => {
@@ -647,6 +694,7 @@ describe('Show Night', () => {
       )
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Power down' }))
     expect(await screen.findByText(/withheld$/)).toBeInTheDocument()
     expect(screen.getByText('Withheld by interlock projector-cooldown: lamp above 40 °C.')).toBeInTheDocument()
   })
@@ -722,6 +770,7 @@ describe('Show Night', () => {
       Promise.reject(new ApiError('Withheld by interlock projector-cooldown.', 409, PROBLEM_TYPE.nightNotReady))
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Power down' }))
     await screen.findByText(/withheld$/)
     expect(screen.queryByLabelText('Safety check')).not.toBeInTheDocument()
     expect(screen.getByText(/does not include "night:override"/)).toBeInTheDocument()
@@ -739,6 +788,7 @@ describe('Show Night', () => {
       session: { ...allowedSessionBase, scopes: ['night:command', 'night:override'] } as never,
     })
     fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Power down' }))
     await screen.findByText(/withheld$/)
     const ruleInput = screen.getByLabelText('Safety check')
     fireEvent.change(ruleInput, { target: { value: 'projector-cooldown' } })
