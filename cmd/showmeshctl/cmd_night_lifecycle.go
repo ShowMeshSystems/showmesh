@@ -132,16 +132,20 @@ func nightLifecycleCommandWithBody(stdout, stderr io.Writer, clock func() time.T
 // end-session consult no interlock and keep using
 // [runSimpleNightLifecycleCommand].
 func runGatedNightLifecycleCommand(args []string, stdout, stderr io.Writer, clock func() time.Time, label, command, help string) int {
-	return runGatedNightLifecycleCommandStopping(args, stdout, stderr, clock, label, command, help, false)
+	return runGatedNightLifecycleCommandStopping(args, stdout, stderr, clock, label, command, help, false, false)
 }
 
 // runGatedNightLifecycleCommandStopping adds --stop-fpp-playback, which
-// only prepare-site honors.
-func runGatedNightLifecycleCommandStopping(args []string, stdout, stderr io.Writer, clock func() time.Time, label, command, help string, offerStopFPP bool) int {
+// only prepare-site honors, and --force, which only power-down honors.
+func runGatedNightLifecycleCommandStopping(args []string, stdout, stderr io.Writer, clock func() time.Time, label, command, help string, offerStopFPP, offerForce bool) int {
 	fs, g := newFlagSet("showmeshctl "+label, stderr)
 	var stopFPP *bool
 	if offerStopFPP {
 		stopFPP = fs.Bool("stop-fpp-playback", false, "also stop whatever the night's FPP players are playing")
+	}
+	var force *bool
+	if offerForce {
+		force = fs.Bool("force", false, "power down now without waiting for the show, the fade, or FPP to confirm the stop")
 	}
 	var overrides []nightCommandOverrideWire
 	fs.Var(nightOverrideFlag{overrides: &overrides}, "override",
@@ -167,12 +171,15 @@ func runGatedNightLifecycleCommandStopping(args []string, stdout, stderr io.Writ
 	if stopFPP != nil && *stopFPP {
 		body["stopFppPlayback"] = true
 	}
+	if force != nil && *force {
+		body["force"] = true
+	}
 	return nightLifecycleCommandWithBody(stdout, stderr, clock, g, label, command, body)
 }
 
 func cmdNightPrepareSite(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommandStopping(args, stdout, stderr, clock, "night prepare-site", "prepare-site",
-		"Start preparing the site for tonight. Safe to repeat.\nFPP keeps playing unless --stop-fpp-playback is given.\nA blocking safety rule can refuse this; see --override.", true)
+		"Start preparing the site for tonight. Safe to repeat.\nFPP keeps playing unless --stop-fpp-playback is given.\nA blocking safety rule can refuse this; see --override.", true, false)
 }
 
 func cmdNightReadiness(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -224,13 +231,13 @@ func cmdNightFadeOut(args []string, stdout, stderr io.Writer, clock func() time.
 }
 
 func cmdNightPowerDown(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
-	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night power-down", "power-down-presentation",
-		"Fade out if needed, stop FPP, then run the configured power-off step.\nWorks while the night is degraded.\nA blocking safety rule can refuse this; see --override.")
+	return runGatedNightLifecycleCommandStopping(args, stdout, stderr, clock, "night power-down", "power-down-presentation",
+		"Fade out if needed, stop FPP, then run the configured power down sequences.\nIf FPP does not confirm the stop within 90 seconds, power down starts anyway\nand the stop is sent again until FPP reports idle.\n--force skips waiting for the show and the fade and starts power down now.\nWorks while the night is degraded.\nA blocking safety rule can refuse this, even with --force; see --override.", false, true)
 }
 
 func cmdNightEndSession(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night end-session", "end-session",
-		"Abandons the current night without stopping FPP or powering anything off.\nUse fade-out-night or power-down-presentation first when either works.\nRun \"night prepare-site\" afterward to recover a degraded night.\n\nThese still work while the night is degraded:\n  request-final-show        admit no more after one more show\n  fade-out-night            fade out and stop FPP\n  power-down-presentation   fade out, stop FPP, then power off\n  end-session               abandon the night\nThe first three end the night in order. Only end-session abandons it.")
+		"Abandons the current night without stopping FPP. A power down already\nrequested still runs its sequences.\nUse fade-out-night or power-down-presentation first when either works.\nRun \"night prepare-site\" afterward to recover a degraded night.\n\nThese still work while the night is degraded:\n  request-final-show        admit no more after one more show\n  fade-out-night            fade out and stop FPP\n  power-down-presentation   fade out, stop FPP, then power off\n  end-session               abandon the night\nThe first three end the night in order. Only end-session abandons it.")
 }
 
 func cmdNightResumeShow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {

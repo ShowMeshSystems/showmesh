@@ -9257,6 +9257,31 @@ paths:
         dispatches. Every other command ignores the field.
 
 
+        `power-down-presentation` reaches `stopped` once FPP reports idle
+        after the shutdown stop, or once 90 seconds pass without that
+        (ADR-069). In the second case the power down sequences start
+        anyway, `boundary.reason` states that FPP did not confirm the
+        stop, and the stop is sent again every 90 seconds until FPP
+        reports idle. A degraded session still runs its power down
+        sequences and end session actions once stopped.
+
+
+        `force` (optional request body field) is honored only by
+        `power-down-presentation`; any other command sent with
+        `force: true` is refused with `400`. A forced power down does
+        not wait for a running show or the fade: it reaches `stopped`
+        at once, records the stop as unconfirmed, starts the power down
+        sequences, and sends the FPP stop until FPP reports idle. Its
+        interlock is still evaluated and can still refuse it with `409`;
+        force never overrides a rule. The audit entry records
+        `force: true`.
+
+
+        `end-session` on a session whose power down was requested but has
+        not started resolves the power down, so its sequences run before
+        the end session actions.
+
+
         `interlockOverrides` (optional request body field, Track F seam
         F6) names configured "block" interlock rules to override for THIS
         command. `night:command` alone never authorizes an override: a
@@ -24003,7 +24028,9 @@ components:
         is reported there and does not fail prepare-site. When the night
         is already prepared (outcome `idempotent_no_op`) nothing is sent
         to FPP and the reason says so. Absent or false leaves FPP
-        playing. Every other command ignores it.
+        playing. Every other command ignores it. `force` is honored only
+        by `power-down-presentation` and refused with `400` on every
+        other command: see `POST /night/commands/{command}`.
       properties:
         idempotencyKey:
           type: string
@@ -24015,6 +24042,11 @@ components:
           type: boolean
         stopFppPlayback:
           type: boolean
+        force:
+          type: boolean
+          description: >-
+            Power down now without waiting for a running show, the fade,
+            or FPP to confirm the stop. Interlocks still apply.
     NightCommandResult:
       type: object
       description: >-

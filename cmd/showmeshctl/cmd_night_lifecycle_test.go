@@ -597,3 +597,51 @@ func TestMinNightPrepareSiteStopClientTimeoutOutlastsTheFPPConfirmationDeadline(
 		t.Fatalf("minNightPrepareSiteStopClientTimeout = %s, want at least the FPP command budget plus the announcement reset pass", minNightPrepareSiteStopClientTimeout)
 	}
 }
+
+func TestCmdNightPowerDownForceFlag(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     []string
+		wantBody string
+	}{
+		{"absent", nil, `{}`},
+		{"set", []string{"--force"}, `{"force":true}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotBody, gotPath string
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				gotBody, gotPath = strings.TrimSpace(string(raw)), r.URL.Path
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("ShowMesh-API-Version", "1")
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = fmt.Fprint(w, `{"serverTime":"2026-10-21T22:00:00Z","command":{"command":"power-down-presentation","outcome":"applied"},
+					"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"stopped",
+					"stateEnteredAt":"2026-10-21T22:00:00Z","cycle":0,"finalShowRequested":false,"finalShowRequestedAt":null,
+					"admissionClosed":true,"admissionClosedAt":null,"shutdownIntent":"power-down","armedShowId":"","showCommitted":false,
+					"readiness":{"state":"unknown","reason":"","sameEpoch":false,"fresh":false,"checks":[]},
+					"powerPhase":{"state":"unknown","reason":""},"transition":{"state":"not_available","reason":""},
+					"degraded":false,"updatedAt":"2026-10-21T22:00:00Z"}}`)
+			}))
+			defer ts.Close()
+
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"power-down", "--server", ts.URL, "--token", "smsh_test"}, tc.args...)
+			if code := cmdNight(args, &stdout, &stderr, time.Now); code != exitOK {
+				t.Fatalf("exit code = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if gotPath != "/api/v1/night/commands/power-down-presentation" || gotBody != tc.wantBody {
+				t.Errorf("request = %s %s, want power-down-presentation with %s", gotPath, gotBody, tc.wantBody)
+			}
+		})
+	}
+}
+
+func TestCmdNightOtherCommandsRefuseForceFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"fade-out", "--force", "--server", "http://127.0.0.1:1", "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage; stderr=%s", code, stderr.String())
+	}
+}

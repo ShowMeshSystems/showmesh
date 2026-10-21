@@ -235,7 +235,8 @@ func (h *handlers) nightCommandHTTPWriteDeadline() time.Duration {
 // every field is optional. skipEnterShowLead is honored only by
 // start-night, the same way idempotencyKey is honored only by
 // prepare-site; every other command ignores it. stopFppPlayback is
-// honored only by prepare-site, too.
+// honored only by prepare-site, too. force is honored only by
+// power-down-presentation and refused on every other command.
 // interlockOverrides is Track F seam F6's own addition
 // (RESTING-MODE.md §10.1): naming a rule here is the caller's request to
 // override it, and is honored only where that rule itself declares
@@ -256,15 +257,16 @@ var nightCommandsConsultingNoInterlock = map[string]bool{
 	nightCommandResumeShow:       true,
 }
 
-func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, skipEnterShowLead, stopFPPPlayback bool, problem *v1.Problem) {
+func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, skipEnterShowLead, stopFPPPlayback, force bool, problem *v1.Problem) {
 	if r.ContentLength == 0 {
-		return "", nil, false, false, nil
+		return "", nil, false, false, false, nil
 	}
 	var body struct {
 		IdempotencyKey     string                          `json:"idempotencyKey"`
 		InterlockOverrides []nightInterlockOverrideRequest `json:"interlockOverrides"`
 		SkipEnterShowLead  bool                            `json:"skipEnterShowLead"`
 		StopFPPPlayback    bool                            `json:"stopFppPlayback"`
+		Force              bool                            `json:"force"`
 	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxNightCommandRequestBodyBytes+1))
 	// Strict decoding, found by review this seam's safety review round: a
@@ -273,20 +275,24 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 	// with no hint the override never arrived at all.
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil && err != io.EOF {
-		p := invalidParameterProblem("The body must be JSON. Allowed fields: idempotencyKey, interlockOverrides, skipEnterShowLead, stopFppPlayback.")
-		return "", nil, false, false, &p
+		p := invalidParameterProblem("The body must be JSON. Allowed fields: idempotencyKey, interlockOverrides, skipEnterShowLead, stopFppPlayback, force.")
+		return "", nil, false, false, false, &p
 	}
 	for _, o := range body.InterlockOverrides {
 		if o.Rule == "" || o.Reason == "" {
 			p := invalidParameterProblem("Every override needs a safety check name and a reason. Fill in both.")
-			return "", nil, false, false, &p
+			return "", nil, false, false, false, &p
 		}
 	}
 	if len(body.InterlockOverrides) > 0 && nightCommandsConsultingNoInterlock[cmd] {
 		p := invalidParameterProblem(fmt.Sprintf("%s takes no override. Send it without one.", inWords(cmd)))
-		return "", nil, false, false, &p
+		return "", nil, false, false, false, &p
 	}
-	return body.IdempotencyKey, body.InterlockOverrides, body.SkipEnterShowLead, body.StopFPPPlayback, nil
+	if body.Force && cmd != nightCommandPowerDownPresentation {
+		p := invalidParameterProblem(fmt.Sprintf("Only power down can be forced, and %s cannot. Send it without force.", inWords(cmd)))
+		return "", nil, false, false, false, &p
+	}
+	return body.IdempotencyKey, body.InterlockOverrides, body.SkipEnterShowLead, body.StopFPPPlayback, body.Force, nil
 }
 
 // handleNightCommand serves POST /api/v1/night/commands/{command}, behind
@@ -301,7 +307,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, invalidParameterProblem("That is not a night command. Check its spelling against the night command list."))
 		return
 	}
-	idempotencyKey, interlockOverrides, skipEnterShowLead, stopFPPPlayback, problem := decodeNightCommandBody(r, cmd)
+	idempotencyKey, interlockOverrides, skipEnterShowLead, stopFPPPlayback, force, problem := decodeNightCommandBody(r, cmd)
 	if problem != nil {
 		writeProblem(w, h.logger, now, *problem)
 		return
@@ -342,7 +348,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case cmd == nightCommandEndSession:
 		out, problem, opErr = h.nightRunExempt(ctx, now, cmd, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightEndSessionDecide(now, current), nil, nil
+			return h.nightEndSessionResolvePowerPhase(ctx, tx, current, h.nightEndSessionDecide(now, current)), nil, nil
 		})
 		// end-session must leave no background audio playing, independent
 		// of the tick loop's own Degraded guard - see
@@ -383,7 +389,10 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		// Its own phase="power-down-presentation" interlock evidence is
 		// dispatched live, outside any transaction; see
 		// [handlers.nightPowerDownPresentationCommand]'s own doc comment.
-		out, problem, opErr = h.nightPowerDownPresentationCommand(ctx, now, issuer, &attributionDegraded, interlockOverrides, callerHasOverrideScope)
+		out, problem, opErr = h.nightPowerDownPresentationCommand(ctx, now, issuer, &attributionDegraded, interlockOverrides, callerHasOverrideScope, force)
+		if force && opErr == nil && problem == nil && out.outcome == nightOutcomeApplied {
+			h.nightWakeLoop()
+		}
 	case nightExemptFromDegradedGate[cmd]:
 		// Only request-final-show remains here: it declares no interlock
 		// phase (RESTING-MODE.md §10.1's nine-phase enum does not include
@@ -1414,7 +1423,10 @@ const nightPowerPhaseConfiguredNotDispatched = "configured_not_dispatched"
 // resolution is purely bookkeeping (never a dispatch of its own) and is
 // never gated: only the FIRST call that actually closes admission or
 // raises the shutdown intent consults the interlock.
-func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry, attributionDegraded *bool, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
+//
+// force, the operator's forced power down, skips waiting for a live show
+// and the fade, but is gated by the same interlocks as an ordinary one.
+func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry, attributionDegraded *bool, overrides []nightInterlockOverrideRequest, callerHasOverrideScope, force bool) (nightCommandOutcome, *v1.Problem, error) {
 	current, hasCurrent, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
 	if err != nil {
 		return nightCommandOutcome{}, nil, err
@@ -1431,9 +1443,9 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 	}
 
 	heldForFallback := h.nightSessionPlayerHeld(ctx, now, current)
-	_, shutdownChanged := applyNightShutdownEffect(now, current, "power-down", nightShutdownOrdinary)
+	_, shutdownChanged := applyNightShutdownEffect(now, current, "power-down", force)
 	var overrideAuditParams []map[string]any
-	if shutdownChanged {
+	if shutdownChanged || (force && current.State != nightStateStopped) {
 		payload, err := h.getPinnedNightSessionPayload(ctx, current)
 		if err != nil {
 			return nightCommandOutcome{}, nil, err
@@ -1457,6 +1469,9 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 	// nightPowerDownPresentationApply already recomputes fresh from
 	// whatever that state actually is.
 	return h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+		if force {
+			return h.nightPowerDownPresentationApplyWith(ctx, tx, nightDropUnlaunchedShowForHold(cur, heldForFallback), now, overrideAuditParams, nightShutdownForced, nightPowerDownSkipFade)
+		}
 		return h.nightPowerDownPresentationApply(ctx, tx, nightDropUnlaunchedShowForHold(cur, heldForFallback), now, overrideAuditParams, nightShutdownOrdinary)
 	})
 }
@@ -1467,6 +1482,17 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 // runs. The PowerPhase resolution below is bookkeeping, not a dispatch,
 // and consults no interlock.
 func (h *handlers) nightPowerDownPresentationApply(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord, now time.Time, overrideAuditParams []map[string]any, force bool) (nightCommandOutcome, *v1.Problem, error) {
+	return h.nightPowerDownPresentationApplyWith(ctx, tx, current, now, overrideAuditParams, force, nightPowerDownFade)
+}
+
+// nightPowerDownFade and nightPowerDownSkipFade name
+// nightPowerDownPresentationApplyWith's skipFade argument at each call site.
+const (
+	nightPowerDownFade     = false
+	nightPowerDownSkipFade = true // the operator's forced power down: stopped at once, stop unconfirmed
+)
+
+func (h *handlers) nightPowerDownPresentationApplyWith(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord, now time.Time, overrideAuditParams []map[string]any, force, skipFade bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
 		return nightCommandOutcome{result: nightSyntheticInactiveSession(now), outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
@@ -1486,26 +1512,72 @@ func (h *handlers) nightPowerDownPresentationApply(ctx context.Context, tx *stor
 			reason:  "The operator stopped the show before it finished.",
 		}
 	}
+	if skipFade && next.State == nightStateFadingOut {
+		next = h.nightForcedStopTx(ctx, tx, next, now)
+		changed = true
+	}
 	if next.State == nightStateStopped && next.PowerPhase == "" {
-		phase := nightShutdownPowerPhaseNotConfigured
-		if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, next); err == nil {
-			// Any sequence at all counts: the loop resolves an empty
-			// selection to not_configured once it reads the skip list.
-			if global, gerr := sitePowerSequencesTx(ctx, tx); gerr == nil && (len(global) > 0 || len(payload.SiteActions.PowerDownSequences(nil)) > 0) {
-				phase = nightPowerPhaseConfiguredNotDispatched
-			}
-		}
-		next.PowerPhase = phase
+		next.PowerPhase = h.nightResolvePowerPhaseTx(ctx, tx, next)
 		changed = true
 	}
 	if !changed {
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
 	out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update", closeCycleOutcome: closeCycleOutcome}
-	if len(overrideAuditParams) > 0 {
-		out.auditParams = map[string]any{"interlockOverrides": overrideAuditParams}
+	if len(overrideAuditParams) > 0 || skipFade {
+		out.auditParams = map[string]any{}
+		if len(overrideAuditParams) > 0 {
+			out.auditParams["interlockOverrides"] = overrideAuditParams
+		}
+		if skipFade {
+			out.auditParams["force"] = true
+		}
 	}
 	return out, nil, nil
+}
+
+// nightForcedStopTx moves a fading-out power down straight to stopped.
+// The stop is sent by the stopped tick's resend, which keeps sending it
+// until FPP reports idle.
+func (h *handlers) nightForcedStopTx(ctx context.Context, tx *store.Tx, rec store.NightSessionRecord, now time.Time) store.NightSessionRecord {
+	rec.State = nightStateStopped
+	rec.StateEnteredAt = now
+	rec.ArmedShowID = ""
+	rec.ShowCommitted = false
+	rec.ContentAnchorJSON = ""
+	rec.BoundaryJSON = ""
+	if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, rec); err == nil {
+		if id := nightShutdownStopInstance(payload); id != "" {
+			rec.BoundaryJSON = encodeNightBoundary(nightStopUnconfirmedBoundary(nightStopForcedFact, id, nil))
+		}
+	}
+	return rec
+}
+
+// nightResolvePowerPhaseTx is a stopped power down's first power phase:
+// configured_not_dispatched when any sequence exists, else not_configured.
+func (h *handlers) nightResolvePowerPhaseTx(ctx context.Context, tx *store.Tx, rec store.NightSessionRecord) string {
+	if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, rec); err == nil {
+		// Any sequence at all counts: the loop resolves an empty
+		// selection to not_configured once it reads the skip list.
+		if global, gerr := sitePowerSequencesTx(ctx, tx); gerr == nil && (len(global) > 0 || len(payload.SiteActions.PowerDownSequences(nil)) > 0) {
+			return nightPowerPhaseConfiguredNotDispatched
+		}
+	}
+	return nightShutdownPowerPhaseNotConfigured
+}
+
+// nightEndSessionResolvePowerPhase lets the operator's End Session run a
+// requested power down: a stopped power down with no power phase gets
+// one, so its sequences run before the end session actions.
+func (h *handlers) nightEndSessionResolvePowerPhase(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord, out nightCommandOutcome) nightCommandOutcome {
+	if current == nil || out.result.State != nightStateStopped || out.result.ShutdownIntent != "power-down" || out.result.PowerPhase != "" {
+		return out
+	}
+	out.result.PowerPhase = h.nightResolvePowerPhaseTx(ctx, tx, out.result)
+	out.outcome = nightOutcomeApplied
+	out.persist = "update"
+	return out
 }
 
 // nightEndSessionDecide is the operator-recovery action: abandons
@@ -2367,7 +2439,7 @@ func mapNightPowerPhase(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 	switch rec.PowerPhase {
 	case "":
 		if rec.ShutdownIntent == "power-down" {
-			return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "Power down was requested. It waits until FPP is seen stopped."}
+			return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "Power down was requested. It waits until FPP is seen stopped, for 90 seconds at most."}
 		}
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "Power down has not been requested."}
 	case "not_configured":

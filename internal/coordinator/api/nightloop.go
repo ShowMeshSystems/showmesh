@@ -158,6 +158,11 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// they work. Parking here without ever issuing the stop would take
 	// away the one thing a degraded session must still be able to do.
 	if rec.Degraded && rec.State != nightStateFadingOut {
+		// A degraded power down still runs its sequences, the stop
+		// resend, and end session actions; nothing that starts output.
+		if rec.State == nightStateStopped && rec.ShutdownIntent == "power-down" {
+			h.nightAdvancePowerOff(ctx, now, rec)
+		}
 		return
 	}
 	if delayed {
