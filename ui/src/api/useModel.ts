@@ -28,6 +28,9 @@ import type {
   ConfigPreviewNDIPutRequest,
   DashboardLayoutConfigResponse,
   PreviewCameraConfigResponse,
+  IntegrationBrokerPutRequest,
+  IntegrationBrokerResponse,
+  IntegrationBrokersListResponse,
   PreviewNDIConfigResponse,
   PreviewGatewayConfigResponse,
   PreviewsResponse,
@@ -1284,6 +1287,18 @@ export function getPreviewGatewayConfig(): Promise<PreviewGatewayConfigResponse>
 
 export function putPreviewGatewayConfig(request: ConfigPreviewGatewayPutRequest): Promise<PreviewGatewayConfigResponse> {
   return store.putPreviewGatewayConfig(request)
+}
+
+export function listIntegrationBrokers(): Promise<IntegrationBrokersListResponse> {
+  return store.listIntegrationBrokers()
+}
+
+export function putIntegrationBroker(id: string, request: IntegrationBrokerPutRequest): Promise<IntegrationBrokerResponse> {
+  return store.putIntegrationBroker(id, request)
+}
+
+export function deleteIntegrationBroker(id: string): Promise<void> {
+  return store.deleteIntegrationBroker(id)
 }
 
 export function getPreviewCamera(id: string): Promise<PreviewCameraConfigResponse> {
