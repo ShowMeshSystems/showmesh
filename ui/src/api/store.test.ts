@@ -3684,6 +3684,43 @@ describe('ApiStore: dispatchNightCommand stopFppPlayback', () => {
   })
 })
 
+describe('ApiStore: dispatchNightCommand force', () => {
+  async function sentBody(command: string, force: boolean | undefined): Promise<Record<string, unknown>> {
+    let gotBody: Record<string, unknown> = {}
+    const s = await server((req, res) => {
+      if (req.url === `/night/commands/${command}` && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, {
+            serverTime: '2026-08-12T22:00:00Z',
+            command: { command, outcome: 'applied', attributionDegraded: false },
+            session: {},
+          })
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+    await makeStore(s.baseUrl).dispatchNightCommand(command as 'power-down-presentation', undefined, undefined, undefined, undefined, force)
+    return gotBody
+  }
+
+  it('sends force: true on power-down-presentation when requested', async () => {
+    expect((await sentBody('power-down-presentation', true)).force).toBe(true)
+  })
+
+  it('sends no force field on power-down-presentation when false or absent', async () => {
+    expect('force' in (await sentBody('power-down-presentation', false))).toBe(false)
+    expect('force' in (await sentBody('power-down-presentation', undefined))).toBe(false)
+  })
+
+  it('never sends force for a command other than power-down-presentation, even when true', async () => {
+    expect('force' in (await sentBody('end-session', true))).toBe(false)
+  })
+})
+
 // Step 8, ADR-015: FPPCommandRequest.params used to be generated as
 // Record<string, never> (api/openapi.yaml declared it as a bare object
 // with no JSON Schema `properties`), a type no non-empty object

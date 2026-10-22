@@ -3358,7 +3358,8 @@ export class ApiStore {
    * caller separately holds `night:override` — `night:command` alone
    * never authorizes a bypass. `skipEnterShowLead` is honored only by
    * `start-night`; sent only when true. `stopFppPlayback` is honored only
-   * by `prepare-site`; sent only when true. Throws a typed `ApiError` on the
+   * by `prepare-site`; sent only when true. `force` is honored only by
+   * `power-down-presentation`; sent only when true. Throws a typed `ApiError` on the
    * three distinguishable `409`s (`night-not-ready`, `night-state-rejected`,
    * `night-ambiguous`) and the `503`
    * (`night-command-refused-audit-unavailable`, `prepare-site`/
@@ -3372,6 +3373,7 @@ export class ApiStore {
     interlockOverrides?: readonly SchemaNightInterlockOverride[],
     skipEnterShowLead?: boolean,
     stopFppPlayback?: boolean,
+    force?: boolean,
   ): Promise<SchemaNightCommandResponse> {
     const controller = this.beginSideCall()
     try {
@@ -3382,6 +3384,7 @@ export class ApiStore {
       }
       if (command === 'start-night' && skipEnterShowLead === true) body.skipEnterShowLead = true
       if (command === 'prepare-site' && stopFppPlayback === true) body.stopFppPlayback = true
+      if (command === 'power-down-presentation' && force === true) body.force = true
       return await this.client.postJson<SchemaNightCommandResponse>(
         `/night/commands/${encodeURIComponent(command)}`,
         body,
