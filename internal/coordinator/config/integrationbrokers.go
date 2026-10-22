@@ -8,23 +8,11 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
-// This file is Step 9 wave 2 Builder A's own addition, per the wave 2
-// shared contract section 5: SHOWMESH_INTEGRATION_BROKERS, the deployment's
-// declared set of external MQTT brokers a show.action's "mqtt" target may
-// name (STEP-9-SPEC.md section 2.10). This is a SECOND, unrelated broker
-// declaration from Config.MQTTBroker (the ADR-008 control-plane broker) and
-// from Config.FPPMQTTBrokerURL (Step 5's single FPP-ingestion broker):
-// SHOWMESH_INTEGRATION_BROKERS can name several, each addressed by an
-// operator-chosen identifier, and — the rule that matters most — THE
-// CONTROL-PLANE BROKER IS NEVER AUTO-REGISTERED UNDER ANY IDENTIFIER HERE.
-// STEP-9-SPEC.md section 2.10 and ADR-008: the integration broker is an
-// integration target, never a control-plane participant, and there is no
-// default — an action naming no broker is rejected at write time
-// (showaction.go's decodeMQTTTarget). This file's own parser never reads
-// Config.MQTTBroker or envMQTTBroker at all, which is what makes that
-// guarantee true rather than merely documented.
+// SHOWMESH_INTEGRATION_BROKERS is the retired way to declare integration
+// brokers. Its value migrates once into the integration.broker kind
+// (integrationbrokerkind.go), and while it stays set, broker edits are refused.
 
-// IntegrationBroker is one declared external MQTT broker.
+// IntegrationBroker is one MQTT broker an mqtt show.action target may name.
 type IntegrationBroker struct {
 	// ID is the identifier a show.action's target.broker field names —
 	// validated with the same [mqttproto.ValidateNodeID] grammar
@@ -46,6 +34,9 @@ type IntegrationBroker struct {
 	// appear in an error, a log line, or LogValue's output in the clear.
 	Username string
 	Password string
+
+	// TopicPrefix, when set, is the only topic tree actions on this broker may use.
+	TopicPrefix string
 }
 
 const (

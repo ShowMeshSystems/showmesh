@@ -27,7 +27,7 @@ func showConfigTestDeps(svc identity.Service, st *store.Store) Dependencies {
 		Nodes: &fakeNodeLister{}, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
 		FPP: &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: "http://10.0.1.20"}}},
-		IntegrationBrokers: []config.IntegrationBroker{
+		IntegrationBrokers: StaticIntegrationBrokers{
 			{ID: "home-automation", URL: "tcp://10.0.0.5:1883"},
 		},
 		Identity: svc, Config: st, Macros: &fakeMacroRunner{}, Commands: st,

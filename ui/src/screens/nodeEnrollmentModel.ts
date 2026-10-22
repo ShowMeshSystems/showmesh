@@ -6,7 +6,7 @@
 const NODE_ID_PATTERN = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/
 
 // pkg/mqttproto's IsCommandNameNodeID plus enrollment.reservedBrokerUsernames.
-const RESERVED_NODE_IDS = new Set(['enroll', 'enrollments', 'coordinator', 'fpp', 'healthcheck', 'observer'])
+const RESERVED_NODE_IDS = new Set(['enroll', 'enrollments', 'coordinator', 'fpp', 'healthcheck', 'observer', 'integration'])
 
 /** Null when nodeId would be accepted; otherwise the reason it would not. */
 export function nodeIdHint(nodeId: string): string | null {

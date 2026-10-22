@@ -1026,10 +1026,11 @@ func decodeMQTTTarget(targetFields map[string]json.RawMessage, brokers []Integra
 	if verr != nil {
 		return ShowActionTarget{}, verr
 	}
-	if !integrationBrokerDeclared(broker, brokers) {
+	declared, ok := findIntegrationBroker(broker, brokers)
+	if !ok {
 		return ShowActionTarget{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: "target.broker",
-			Detail: fmt.Sprintf("Broker %s is not declared. Declare it first.", broker),
+			Detail: fmt.Sprintf("Broker %s does not exist. Add it in Settings or pick another broker.", broker),
 		}
 	}
 
@@ -1049,6 +1050,14 @@ func decodeMQTTTarget(targetFields map[string]json.RawMessage, brokers []Integra
 	expect, verr := decodeMQTTExpect(expectFields)
 	if verr != nil {
 		return ShowActionTarget{}, verr
+	}
+	if msg := IntegrationTopicProblem(declared, publish.Topic); msg != "" {
+		return ShowActionTarget{}, &ValidationError{Code: ValidationCodeFieldInvalid, Detail: msg}
+	}
+	if expect.Kind != MQTTExpectKindNone {
+		if msg := IntegrationTopicProblem(declared, expect.Topic); msg != "" {
+			return ShowActionTarget{}, &ValidationError{Code: ValidationCodeFieldInvalid, Detail: msg}
+		}
 	}
 
 	return ShowActionTarget{
@@ -1683,13 +1692,13 @@ func fppInstanceConfigured(id string, endpoints []FPPEndpoint) bool {
 	return false
 }
 
-func integrationBrokerDeclared(id string, brokers []IntegrationBroker) bool {
+func findIntegrationBroker(id string, brokers []IntegrationBroker) (IntegrationBroker, bool) {
 	for _, b := range brokers {
 		if b.ID == id {
-			return true
+			return b, true
 		}
 	}
-	return false
+	return IntegrationBroker{}, false
 }
 
 func stringInSlice(s string, list []string) bool {

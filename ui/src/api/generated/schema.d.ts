@@ -1977,7 +1977,7 @@ export interface paths {
         get: operations["getShowAction"];
         /**
          * Write a new show.action revision (Step 9)
-         * @description Requires `config:write` (admin only). `show` is immutable: a PUT that changes an existing object's `show` is refused, naming both, with problem type `show-config-cross-show-reference`. `show` must name an existing `show` config object (`GET /config/show`); a nonexistent show is refused naming the missing id. This is a write-time check only - an existing revision written before this check shipped still reads, lists, and runs unchanged. `safetyClass` is required and must agree with an `fpp` target's own registered primitive safety class; an `mqtt` target's `broker` must name a broker this deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no default. Absent, `null`, and explicitly empty are three different things on every field. Two keys in this payload default when absent, and reject a present `null` as invalid: `description` (defaults to empty, i.e. no description) and `target.publish.retain` (defaults to `false`) - the same rule show.macro's `onFailure`/`onUnconfirmed` uses. The request body for these two is therefore ConfigShowActionWrite, not ConfigShowAction: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload, never the raw request body. Audited in the same transaction as the revision write (ADR-024 decision 11). Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current, or when becoming a Resolume action is blocked by a stored macro step's local fallback.
+         * @description Requires `config:write` (admin only). `show` is immutable: a PUT that changes an existing object's `show` is refused, naming both, with problem type `show-config-cross-show-reference`. `show` must name an existing `show` config object (`GET /config/show`); a nonexistent show is refused naming the missing id. This is a write-time check only - an existing revision written before this check shipped still reads, lists, and runs unchanged. `safetyClass` is required and must agree with an `fpp` target's own registered primitive safety class; an `mqtt` target's `broker` must name a broker from `GET /config/integration.broker`, with no default, and on a broker with a `topicPrefix` both topics must start with it. Absent, `null`, and explicitly empty are three different things on every field. Two keys in this payload default when absent, and reject a present `null` as invalid: `description` (defaults to empty, i.e. no description) and `target.publish.retain` (defaults to `false`) - the same rule show.macro's `onFailure`/`onUnconfirmed` uses. The request body for these two is therefore ConfigShowActionWrite, not ConfigShowAction: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload, never the raw request body. Audited in the same transaction as the revision write (ADR-024 decision 11). Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current, or when becoming a Resolume action is blocked by a stored macro step's local fallback.
          */
         put: operations["putShowAction"];
         post?: never;
@@ -3923,6 +3923,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/integration.broker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The MQTT brokers an mqtt action may name
+         * @description Requires `config:write`. The built-in broker comes first, with `builtIn` true, whenever this coordinator manages the built-in broker's logins; it connects with its own `integration` login and its actions must use topics that start with `topicPrefix`. The stored brokers follow, sorted by id. Passwords are never returned. `editsBlocked` is empty when brokers can be edited, and otherwise says why they cannot.
+         */
+        get: operations["listIntegrationBrokers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/integration.broker/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The broker id an mqtt action's `target.broker` names: 1 to 64 lowercase letters, digits or hyphens. `built-in` is the built-in broker. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * One integration broker
+         * @description Requires `config:write`. The password is never returned.
+         */
+        get: operations["getIntegrationBroker"];
+        /**
+         * Add or change an integration broker
+         * @description Requires `config:write`. A partial update: an absent key keeps its stored value, and creating a broker requires `url`. A `null` or empty `password` clears it. The password is stored apart from the revision and never returned. Connections follow the change without a restart. Refused with `409` for `built-in`, and while `SHOWMESH_INTEGRATION_BROKERS` is still set on the coordinator.
+         */
+        put: operations["putIntegrationBroker"];
+        post?: never;
+        /**
+         * Remove an integration broker (tombstone)
+         * @description Requires `config:write` and an explicit `{"confirm":true}` body. The revisions stay readable and the stored password is removed. Refused with `409` while any action still names this broker, for `built-in`, and while `SHOWMESH_INTEGRATION_BROKERS` is still set. Optionally carries `If-Match`.
+         */
+        delete: operations["deleteIntegrationBroker"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/integration.broker/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Integration broker revision history, newest first
+         * @description Requires `config:write`. Metadata only. `200` with an empty array for an id that has never been saved.
+         */
+        get: operations["getIntegrationBrokerRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/preview.ndi": {
         parameters: {
             query?: never;
@@ -5640,7 +5711,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "show.sitepower" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings" | "preview.gateway" | "preview.camera" | "preview.ndi" | "dashboard.layout";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "show.sitepower" | "media.playlist" | "node.clock" | "show.weatherdelay" | "release.settings" | "preview.gateway" | "preview.camera" | "preview.ndi" | "dashboard.layout" | "integration.broker";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The "preview.gateway" kind's payload. `tokenSet` reports presence only: the gateway token never appears on any wire type. An empty `url` means previews are off. */
@@ -5674,6 +5745,45 @@ export interface components {
             enabled: boolean;
             urlSet: boolean;
             urlDisplay: string;
+        };
+        /** @description One MQTT broker an mqtt action may name. */
+        IntegrationBroker: {
+            id: string;
+            /** @description The broker address, such as `tcp://10.0.0.5:1883`. */
+            url: string;
+            username: string;
+            passwordSet: boolean;
+            /** @description True for the built-in broker, which cannot be changed or removed. */
+            builtIn: boolean;
+            /** @description When not empty, the only topic tree actions on this broker may use. */
+            topicPrefix: string;
+            /** @description The active revision, or 0 for the built-in broker. */
+            revision: number;
+            /** Format: date-time */
+            updatedAt: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api" | "migration" | "built-in";
+        };
+        /** @description The body of GET /config/integration.broker. */
+        IntegrationBrokersListResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            brokers: components["schemas"]["IntegrationBroker"][];
+            /** @description Empty when brokers can be edited, and otherwise the reason they cannot. */
+            editsBlocked: string;
+        };
+        /** @description The body of GET and PUT /config/integration.broker/{id}. */
+        IntegrationBrokerResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            broker: components["schemas"]["IntegrationBroker"];
+        };
+        /** @description The request body of PUT /config/integration.broker/{id}. Every field is optional on an existing broker; creating one requires `url`. */
+        IntegrationBrokerPutRequest: {
+            url?: string;
+            username?: string;
+            password?: string | null;
         };
         /** @description The request body of PUT /config/preview.camera/{id}. Every field is optional on an existing camera; creating one requires `name` and `url`. `url` must start with `rtsp://` or `rtsps://`. */
         ConfigPreviewCameraPutRequest: {
@@ -17277,6 +17387,162 @@ export interface operations {
         };
     };
     getPreviewCameraRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listIntegrationBrokers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationBrokersListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getIntegrationBroker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The broker id an mqtt action's `target.broker` names: 1 to 64 lowercase letters, digits or hyphens. `built-in` is the built-in broker. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationBrokerResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putIntegrationBroker: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path: {
+                /** @description The broker id an mqtt action's `target.broker` names: 1 to 64 lowercase letters, digits or hyphens. `built-in` is the built-in broker. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationBrokerPutRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationBrokerResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteIntegrationBroker: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                /** @description The broker id an mqtt action's `target.broker` names: 1 to 64 lowercase letters, digits or hyphens. `built-in` is the built-in broker. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The broker was removed. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getIntegrationBrokerRevisions: {
         parameters: {
             query?: never;
             header?: never;

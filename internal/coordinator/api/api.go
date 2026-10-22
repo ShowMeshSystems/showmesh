@@ -251,21 +251,13 @@ type Dependencies struct {
 	// success" rule as every other write dependency's default.
 	Macros MacroRunner
 
-	// IntegrationBrokers is the deployment's declared external MQTT broker
-	// set (SHOWMESH_INTEGRATION_BROKERS — internal/coordinator/config's
-	// IntegrationBroker, wave 2 shared contract section 5), threaded
-	// through as data for the identical reason [FPPEndpointsEnvVarSet] is:
-	// this package does not read the environment or the config package's
-	// own parsing on its own. Consumed by showconfig.go's show.action
-	// write validation to check an mqtt target's declared broker against
-	// what this deployment actually has (STEP-9-SPEC.md section 2.10: "an
-	// action naming no broker is rejected at write time... validated at
-	// write time against the brokers the deployment declares"). This is
-	// the declared SET only, for validation — actually publishing through
-	// one of them at run time is [Dependencies.Macros]' own
-	// *broker.Registry dependency, built and wired separately by
-	// coordinator wiring, never held here: this package never publishes.
-	IntegrationBrokers []config.IntegrationBroker
+	// IntegrationBrokers lists the brokers an mqtt show.action may name, for
+	// write-time validation and the broker list. Publishing goes through
+	// [Dependencies.MQTTBrokers]; this package never publishes through it.
+	IntegrationBrokers IntegrationBrokerSource
+	// IntegrationBrokersEnvVarSet is true while SHOWMESH_INTEGRATION_BROKERS
+	// is still set; broker edits are refused until it is removed (ADR-039 decision 4).
+	IntegrationBrokersEnvVarSet bool
 	// ResolumeID is SHOWMESH_RESOLUME_ID ([config.Config.ResolumeID]),
 	// threaded through for the identical "this package does not read the
 	// environment or config package state on its own" reason
@@ -839,6 +831,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.MQTTBrokers == nil {
 		d.MQTTBrokers = noMQTTBrokerRegistry{}
+	}
+	if d.IntegrationBrokers == nil {
+		d.IntegrationBrokers = StaticIntegrationBrokers(nil)
 	}
 	if d.ResolumeRecovery == nil {
 		d.ResolumeRecovery = noResolumeRecoveryProvider{}
@@ -2135,6 +2130,11 @@ func New(deps Dependencies, opts Options) *API {
 	// kind. The dashboard layout holds no secret, so it reads under
 	// observation:read and writes under dashboard:write, which operators hold.
 	// The preview routes require observation:read even when reads are open.
+	mux.HandleFunc("GET /api/v1/config/integration.broker", h.requireScope(identity.ScopeConfigWrite, h.handleListIntegrationBrokers))
+	mux.HandleFunc("GET /api/v1/config/integration.broker/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetIntegrationBroker))
+	mux.HandleFunc("PUT /api/v1/config/integration.broker/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutIntegrationBroker))
+	mux.HandleFunc("DELETE /api/v1/config/integration.broker/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteIntegrationBroker))
+	mux.HandleFunc("GET /api/v1/config/integration.broker/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetIntegrationBrokerRevisions))
 	mux.HandleFunc("GET /api/v1/config/preview.gateway", h.requireScope(identity.ScopeConfigWrite, h.handleGetPreviewGatewayConfig))
 	mux.HandleFunc("PUT /api/v1/config/preview.gateway", h.writeGuard(&scopeConfigWrite, h.handlePutPreviewGatewayConfig))
 	mux.HandleFunc("GET /api/v1/config/preview.gateway/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetPreviewGatewayConfigRevisions))
