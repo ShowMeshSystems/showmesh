@@ -25,6 +25,7 @@ import { ShowsCues } from '../screens/ShowsCues'
 import { ShowsAssets } from '../screens/ShowsAssets'
 import { ShowsPresentation } from '../screens/ShowsPresentation'
 import { ShowsAutomation } from '../screens/ShowsAutomation'
+import { ShowsSequenceTesting } from '../screens/ShowsSequenceTesting'
 import { ShowsNightSession } from '../screens/ShowsNightSession'
 import { Access } from '../screens/Access'
 import { Settings } from '../screens/Settings'
@@ -124,6 +125,7 @@ export default function App() {
               <Route path="assets" element={<ShowsAssets />} />
               <Route path="presentation" element={<ShowsPresentation />} />
               <Route path="automation" element={<ShowsAutomation />} />
+              <Route path="sequence-testing" element={<ShowsSequenceTesting />} />
               <Route path="night-session" element={<ShowsNightSession />} />
             </Route>
             <Route path="settings" element={<Settings />}>

@@ -152,6 +152,8 @@ func segmentsCompatible(cli, api []pathSegment) bool {
 // longer exists in api/openapi.yaml fails the test, so this map cannot
 // go stale in either direction.
 var dynamicWritePathCoverage = map[string]string{
+	"PUT /config/show.sequencetest/{id}": "cmd_seqtest.go seqTestConfigPath builds " +
+		"/api/v1/config/show.sequencetest/<show> (showmeshctl seqtest set --show)",
 	"POST /principals/{id}/enable": "cmd_principal.go cmdPrincipalSetDisabled builds " +
 		"/api/v1/principals/<id>/<verb> with verb=enable (showmeshctl principal enable)",
 	"POST /principals/{id}/disable": "cmd_principal.go cmdPrincipalSetDisabled builds " +

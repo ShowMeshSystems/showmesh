@@ -104,6 +104,11 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
 	}
 
+	testTriggers, err := sequenceTestTriggers(ctx, st, showID, nodeID)
+	if err != nil {
+		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
+	}
+
 	// A program-only audio.node declares no LTC route at all, so
 	// having an audio.node no longer implies being able to emit LTC. LTC
 	// scoping, LTC output projection, and the LTC claim context all key
@@ -161,19 +166,25 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		// deploying drafts is how a half-authored Cue would reach a node
 		// (H3 spec section 3, point 2).
 		directlyActivatableAnnouncement := payload.Outputs.Announcement != nil
-		if !referencedCues[obj.ID] && !directlyActivatableAnnouncement {
+		testOnly := !referencedCues[obj.ID] && !directlyActivatableAnnouncement
+		if testOnly && testTriggers[obj.ID] == nil {
 			continue
 		}
 
 		outputs := resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets, showAudioNodes, assetsBySequence)
 
 		entries = append(entries, cuecatalog.Entry{
-			CueID:       obj.ID,
-			CueRevision: obj.CurrentRevision,
-			Outputs:     outputs,
-			Triggers:    resolveCueTriggers(triggerSeeds[obj.ID], outputs),
+			CueID:        obj.ID,
+			CueRevision:  obj.CurrentRevision,
+			Outputs:      outputs,
+			Triggers:     resolveCueTriggers(triggerSeeds[obj.ID], outputs),
+			TestTriggers: sortedTestTriggers(testTriggers[obj.ID]),
 		})
 
+		// A test-only Cue plays instead of a playlist entry, never beside one.
+		if testOnly {
+			continue
+		}
 		scoped := scopeShowCueOutputsForNode(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets, showAudioNodes)
 		conflict, err := detectClaimConflicts(claimants, claimant{cueID: obj.ID, playlists: referencingPlaylists[obj.ID]}, scoped, claimCtx)
 		if err != nil {

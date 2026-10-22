@@ -341,6 +341,9 @@ type SchemaEmergencyStopConfigResponse = components['schemas']['EmergencyStopCon
 type SchemaConfigEmergencyStopPayload = components['schemas']['ConfigEmergencyStopPayload']
 type SchemaSitePowerConfigResponse = components['schemas']['SitePowerConfigResponse']
 type SchemaConfigSitePowerPayload = components['schemas']['ConfigSitePowerPayload']
+type SchemaSequenceTestConfigResponse = components['schemas']['SequenceTestConfigResponse']
+type SchemaConfigSequenceTestPayload = components['schemas']['ConfigSequenceTestPayload']
+type SchemaFPPSequenceListResponse = components['schemas']['FPPSequenceListResponse']
 type SchemaSitePowerRunResponse = components['schemas']['SitePowerRunResponse']
 type SchemaConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
 
@@ -4216,6 +4219,36 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.putJson<SchemaSitePowerConfigResponse>('/config/show.sitepower', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.sequencetest/{id}`: one show's sequence test list. */
+  async getSequenceTestConfig(showId: string): Promise<SchemaSequenceTestConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaSequenceTestConfigResponse>(`/config/show.sequencetest/${encodeURIComponent(showId)}`, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/fpp/sequences`: the sequence files the configured FPPs hold. */
+  async listFPPSequences(): Promise<SchemaFPPSequenceListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPSequenceListResponse>('/fpp/sequences', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/show.sequencetest/{id}`: a full replacement. */
+  async putSequenceTestConfig(showId: string, payload: SchemaConfigSequenceTestPayload): Promise<SchemaSequenceTestConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaSequenceTestConfigResponse>(`/config/show.sequencetest/${encodeURIComponent(showId)}`, payload, controller.signal)
     } finally {
       this.endSideCall(controller)
     }

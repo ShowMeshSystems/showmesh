@@ -50,7 +50,10 @@ type cueAudioTriggerTable map[string]cueAudioTriggerEntry
 // never carried triggers: an empty table answers every lookup with "not
 // found," the coordinator-only start path this node already ran before
 // ADR-051 existed.
-func buildCueAudioTriggerTable(entries []cuecatalog.Entry) cueAudioTriggerTable {
+//
+// withTestTriggers adds each entry's TestTriggers (ADR-067) only where no
+// playlist trigger already claims the filename.
+func buildCueAudioTriggerTable(entries []cuecatalog.Entry, withTestTriggers bool) cueAudioTriggerTable {
 	table := make(cueAudioTriggerTable)
 	for _, e := range entries {
 		if e.Outputs.Audio == nil || len(e.Triggers) == 0 {
@@ -58,6 +61,20 @@ func buildCueAudioTriggerTable(entries []cuecatalog.Entry) cueAudioTriggerTable 
 		}
 		for _, filename := range e.Triggers {
 			if filename == "" {
+				continue
+			}
+			table[filename] = cueAudioTriggerEntry{CueID: e.CueID, Audio: *e.Outputs.Audio, LTC: e.Outputs.LTC}
+		}
+	}
+	if !withTestTriggers {
+		return table
+	}
+	for _, e := range entries {
+		if e.Outputs.Audio == nil {
+			continue
+		}
+		for _, filename := range e.TestTriggers {
+			if _, taken := table[filename]; filename == "" || taken {
 				continue
 			}
 			table[filename] = cueAudioTriggerEntry{CueID: e.CueID, Audio: *e.Outputs.Audio, LTC: e.Outputs.LTC}
@@ -100,9 +117,11 @@ type multiSyncCueAudioTrigger struct {
 	assetDir     string
 	timeline     *multisync.Timeline
 	weatherDelay *WeatherDelayHolder
+	nightState   *NightStateHolder
 
 	tableMu       sync.Mutex
 	tableRevision string
+	tableTests    bool
 	table         cueAudioTriggerTable
 
 	// stateMu guards generation and preparedLate: this hook's own
@@ -178,6 +197,20 @@ func (c *multiSyncCueAudioTrigger) SetSources(catalogStore *heldcatalog.FileStor
 	c.weatherDelay = weatherDelay
 }
 
+// SetNightState wires the night flag that gates TestTriggers. Unset means open.
+func (c *multiSyncCueAudioTrigger) SetNightState(h *NightStateHolder) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nightState = h
+}
+
+func (c *multiSyncCueAudioTrigger) testTriggersOn() bool {
+	c.mu.Lock()
+	h := c.nightState
+	c.mu.Unlock()
+	return !h.Open()
+}
+
 func (c *multiSyncCueAudioTrigger) sources() (*heldcatalog.FileStore, *audio.Manager, string, *multisync.Timeline) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -196,7 +229,7 @@ func (c *multiSyncCueAudioTrigger) weatherDelayActive() bool {
 
 // lookup resolves filename against this node's current held catalog,
 // rebuilding the cached trigger table only when the held catalog's own
-// revision has changed since the last lookup, cheap enough to check on
+// revision or the night flag has changed since the last lookup, cheap enough to check on
 // every OPEN/START/STOP (a handful of packets per sequence, never on the
 // much more frequent SYNC, which this hook never even sees, see
 // HandleSequencePacket).
@@ -205,10 +238,12 @@ func (c *multiSyncCueAudioTrigger) lookup(filename string, catalogStore *heldcat
 	if err != nil || !ok {
 		return cueAudioTriggerEntry{}, false
 	}
+	tests := c.testTriggersOn()
 	c.tableMu.Lock()
-	if c.tableRevision != rec.Revision {
-		c.table = buildCueAudioTriggerTable(rec.Entries)
+	if c.tableRevision != rec.Revision || c.tableTests != tests {
+		c.table = buildCueAudioTriggerTable(rec.Entries, tests)
 		c.tableRevision = rec.Revision
+		c.tableTests = tests
 	}
 	table := c.table
 	c.tableMu.Unlock()
