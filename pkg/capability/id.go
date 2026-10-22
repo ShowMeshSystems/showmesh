@@ -88,7 +88,13 @@ var knownIDs = map[ID]struct{}{
 	// for why the coordinator sends a wire ceiling only when a node's own
 	// live advertisement confirms it.
 	"audio.playback.ceiling": {},
+
+	CueTestTriggers: {},
 }
+
+// CueTestTriggers is advertised by an agent that honors a cue catalog's
+// testTriggers (ADR-067); the coordinator sends test mappings to no other node.
+const CueTestTriggers ID = "cue.testtriggers"
 
 // withdrawnIDs are identifiers ARCHITECTURE section 6 records as replaced:
 // audio.output.* superseded audio.playback/audio.multichannel/audio.dante,

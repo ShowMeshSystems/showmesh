@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
@@ -81,6 +82,14 @@ func detectCapabilities(ctx context.Context) capability.Set {
 	set = append(set, detectAudioCapabilities(ctx)...)
 
 	return set
+}
+
+// withSoftwareCapabilities adds what this agent build supports on any host, without probing.
+func withSoftwareCapabilities(caps capability.Set) capability.Set {
+	if _, ok := caps.Lookup(capability.CueTestTriggers); ok {
+		return caps
+	}
+	return append(slices.Clone(caps), capability.Capability{ID: capability.CueTestTriggers, Version: 1})
 }
 
 // detectRenderSurfaceFormats runs [pipeline.ProbeFSEQSourceFormat] per
