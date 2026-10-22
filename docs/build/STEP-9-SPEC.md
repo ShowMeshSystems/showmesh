@@ -135,6 +135,8 @@ Left implicit, an operator authors `projectors-on`, the coordinator publishes to
 
 **The ADR-008 dimension, stated rather than assumed.** Publishing show-affecting commands onto a broker outside the ShowMesh control plane is a real departure and gets its one sentence: the external broker is an integration target, never a control-plane participant, and nothing in ShowMesh's own liveness, inventory or command path may depend on it. It carries integration traffic only, exactly as an HTTP integration target would.
 
+**Amended 2026-10-22: the built-in broker is listed as `built-in`.** The owner ruled that a built-in broker bridged to Home Assistant is a legitimate integration target, so it now appears beside the stored brokers, which an operator adds in Settings rather than in `SHOWMESH_INTEGRATION_BROKERS`. It does not join the control plane: the coordinator reaches it through a separate `integration` login whose broker access list allows `showmesh-actions/#` only, and an action naming it must use topics under that prefix, checked at write time. An action still names its broker explicitly; nothing defaults to `built-in`.
+
 **And the standing rule is unchanged by this.** §14 forbids any MQTT publish against the operator's live broker during this step's development and acceptance. Every test in §11 uses a bench broker. Shipping the capability to publish to a declared broker and pointing it at the live one are two different acts, and this step does only the first.
 
 ## 3. Corrections to the incoming brief

@@ -531,7 +531,13 @@ func (h *handlers) handlePutShowAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowActionPayload(string(raw), endpoints, h.deps.IntegrationBrokers, FPPPrimitiveRegistry, h.deps.ResolumeReferences, h.showExists(r.Context()), h.showAudioNodes(r.Context()))
+	brokers, err := h.deps.IntegrationBrokers.IntegrationBrokers(r.Context())
+	if err != nil {
+		h.writeInternalError(w, now, "list integration brokers for show.action validation", err)
+		return
+	}
+
+	payload, verr := config.DecodeShowActionPayload(string(raw), endpoints, brokers, FPPPrimitiveRegistry, h.deps.ResolumeReferences, h.showExists(r.Context()), h.showAudioNodes(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
