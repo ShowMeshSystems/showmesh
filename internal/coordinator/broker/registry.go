@@ -85,6 +85,16 @@ func (r *Registry) Register(id string, bm *BrokerManager) error {
 	return nil
 }
 
+// Unregister removes id and returns the BrokerManager it named, or nil. The
+// caller owns disconnecting it; a waiter already running on it keeps it.
+func (r *Registry) Unregister(id string) *BrokerManager {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	bm := r.managers[id]
+	delete(r.managers, id)
+	return bm
+}
+
 // Get resolves id to its registered BrokerManager. There is no default
 // broker: an empty id, or an id nothing has registered, is
 // [ErrUnknownBroker].

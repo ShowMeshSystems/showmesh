@@ -143,12 +143,12 @@ apply_broker_config_ownership() {
   return 0
 }
 
-# coord_choose_ui_port sets UI_PORT from --ui-port, the saved setting, or an answer, and refuses a port something else holds.
+# coord_choose_ui_port sets UI_PORT from --ui-port, the saved setting, or an answer on first install, and refuses a port something else holds.
 coord_choose_ui_port() {
   local saved api_port mqtt_port fpp_port held
   saved="$(env_get "$COORD_ENV" SHOWMESH_UI_PORT)"
   UI_PORT="${OPT_UI_PORT:-${saved:-8081}}"
-  if [ -z "$OPT_UI_PORT" ] && can_prompt; then
+  if [ -z "$OPT_UI_PORT" ] && [ -z "$saved" ] && can_prompt; then
     step "Choosing the operator UI's port"
     info "Port 80 opens the UI without a port in the address, like FPP. Port 8081 is the default."
     ask UI_PORT "Operator UI port" "$UI_PORT"

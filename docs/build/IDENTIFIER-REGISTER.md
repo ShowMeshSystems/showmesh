@@ -118,11 +118,13 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `node.clock` | operator-chosen (the node id) | reserved | Track I seam I1 |
 | `show.emergencystop` | `default` singleton | shipped | Lane 17a SM-129 |
 | `show.sitepower` | `default` singleton | reserved | ADR-065: global shutdown sequences and the power-on action list |
+| `show.sequencetest` | the show id | shipped | ADR-067: FPP sequence filename to Cue mappings that run outside a night session |
 | `show.weatherdelay` | `default` singleton | shipped | ADR-053 weather delay: the alert assets and repeat count, the target nodes, the operator-defined power groups and their optional heartbeat, the trigger sources and their answer windows. Every field optional |
 | `media.playlist` | operator-chosen | shipped | SM-524 / SM-457 |
 | `release.settings` | `default` singleton | shipped | the newest-release check: enabled and interval |
 | `preview.gateway` | `default` singleton | shipped | ADR-060: the preview gateway address and its token (credential) |
 | `preview.camera` | operator-chosen | shipped | ADR-060: one RTSP camera; its URL is a credential |
+| `events.mqtt` | `default` singleton | shipped | ADR-068: publish coordinator events to one integration broker; `enabled`, `broker`, `topicPrefix`, all optional |
 | `preview.ndi` | operator-chosen | shipped | ADR-060: one NDI source added by hand, by NDI name and optional address |
 | `dashboard.layout` | `default` singleton | shipped | ADR-060: the dashboard preview order and hidden tiles |
 
@@ -421,6 +423,7 @@ above was added for.
 | `audio.transition.sequential` | shipped | Lane 17a SM-201 |
 | `audio.transition.gapless` | reserved | Lane 17a SM-201 |
 | `audio.transition.crossfade` | reserved | Lane 17a SM-201 |
+| `cue.testtriggers` | shipped | ADR-067: the agent honors a cue catalog's `testTriggers`. Version 1, no attributes. The coordinator leaves test mappings out of the catalog for a node that does not advertise it |
 
 **`audio.playback`, `audio.multichannel`, `audio.dante` and
 `timecode.ltc.generate` are withdrawn**, recorded in `withdrawnIDs` and
@@ -577,6 +580,7 @@ after shipping a breaking change to stored history.
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
 | `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
+| `night.state.set` | shipped | ADR-067 sequence testing: node-scoped, params `{"open": bool}`. The coordinator sends whether a night session is open on change, on node hello, and once a minute. The node persists it and honors catalog `testTriggers` only while it is false; a node that never received it treats the night as open. Result signal `node.night.open` falls under the `node.*` observation namespace |
 | `fallback.program.deploy` | released | Track J seam J1 landed WITHOUT it, which is the condition its own reservation named. The plugin fetches over the HTTP paths under `/api/v1/fallback-programs`; the coordinator never pushes. Free to reuse |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
@@ -1374,6 +1378,8 @@ Step 2; add rows here before minting one.
 | `showmesh/fpp/<instance-id>/observed/fallback` (retained) | released | Track J seam J1 landed without it. Free to reuse |
 | `showmesh/events/weather_delay` (retained) | shipped | ADR-053 weather delay: the system-wide delay state, on `showmesh/events/show_mode`'s own precedent |
 | `showmesh/events/weather_delay/dark/<group-id>` | shipped | ADR-053 weather delay: the optional per-power-group "confirmed dark" heartbeat an outside power controller listens for. Not retained: a heartbeat that stops must read as stopped |
+| `<topicPrefix>/events/<category>` on an integration broker | reserved | ADR-068: every event-history row, not retained. On the built-in broker the prefix must start with `showmesh-actions/`; `topicPrefix` defaults to `showmesh` |
+| `<topicPrefix>/night/state` (retained) on an integration broker | reserved | ADR-068: the current night state. On the built-in broker the prefix must start with `showmesh-actions/` |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -1659,6 +1665,18 @@ the stream non-resumable, so a client that misses frames re-fetches the
 authoritative session state rather than reconstructing it from a sequence of
 transition events; a per-transition kind would invite exactly the
 reconstruction the non-resumable rule forbids.
+
+## Event history categories
+
+`store.EventRecord.Category`. Since ADR-068 these are MQTT topic segments a
+subscriber filters on, so a new or renamed category is recorded here. Older
+categories predate this section and are not yet listed.
+
+| Category | Status | Owner |
+|---|---|---|
+| `night.command.refused` | shipped | ADR-068: a night command was refused; the reason the operator saw |
+| `night.command.applied` | shipped | ADR-068: a night command was applied |
+| `night.readiness.completed` | shipped | ADR-068: Run readiness finished; outcome and failing checks |
 
 ## Research record numbers
 

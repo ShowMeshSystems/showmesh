@@ -223,7 +223,13 @@ func (h *handlers) checkActionBindingTarget(ctx context.Context, id string, payl
 		}
 		binding.State, binding.Reason = checkFPPActionBinding(payload.Target, endpoints)
 	case config.ShowActionIntegrationMQTT:
-		binding.State, binding.Reason = checkMQTTActionBinding(payload.Target, h.deps.IntegrationBrokers)
+		brokers, err := h.deps.IntegrationBrokers.IntegrationBrokers(ctx)
+		if err != nil {
+			binding.State = v1.ActionBindingStateUnknown
+			binding.Reason = fmt.Sprintf("this coordinator could not list integration brokers to check the binding: %v", err)
+			break
+		}
+		binding.State, binding.Reason = checkMQTTActionBinding(payload.Target, brokers)
 	case config.ShowActionIntegrationResolume:
 		binding.State, binding.Reason = h.checkResolumeActionBinding(payload.Target)
 	case config.ShowActionIntegrationAudio:
@@ -294,16 +300,15 @@ func checkFPPActionBinding(target config.ShowActionTarget, endpoints []config.FP
 	return v1.ActionBindingStateOK, fmt.Sprintf("fpp instance %q and primitive %q both still resolve", target.InstanceID, target.Primitive)
 }
 
-// checkMQTTActionBinding checks only that the declared broker is still
-// declared — never whether it is reachable right now, which is a
-// transport condition, not a binding fault.
+// checkMQTTActionBinding checks only that the named broker still exists,
+// never whether it is reachable right now, which is a transport condition.
 func checkMQTTActionBinding(target config.ShowActionTarget, brokers []config.IntegrationBroker) (state, reason string) {
 	for _, b := range brokers {
 		if b.ID == target.Broker {
-			return v1.ActionBindingStateOK, fmt.Sprintf("broker %q is still a declared integration broker", target.Broker)
+			return v1.ActionBindingStateOK, fmt.Sprintf("broker %q still exists", target.Broker)
 		}
 	}
-	return v1.ActionBindingStateBroken, fmt.Sprintf("broker %q is not a declared integration broker", target.Broker)
+	return v1.ActionBindingStateBroken, fmt.Sprintf("broker %q no longer exists", target.Broker)
 }
 
 // checkResolumeActionBinding runs target's stored reference through

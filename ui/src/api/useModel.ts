@@ -28,6 +28,9 @@ import type {
   ConfigPreviewNDIPutRequest,
   DashboardLayoutConfigResponse,
   PreviewCameraConfigResponse,
+  IntegrationBrokerPutRequest,
+  IntegrationBrokerResponse,
+  IntegrationBrokersListResponse,
   PreviewNDIConfigResponse,
   PreviewGatewayConfigResponse,
   PreviewsResponse,
@@ -103,6 +106,11 @@ import type {
   ConfigEmergencyStopPayload,
   SitePowerConfigResponse,
   ConfigSitePowerPayload,
+  EventsMQTTConfigResponse,
+  ConfigEventsMQTTPutPayload,
+  SequenceTestConfigResponse,
+  ConfigSequenceTestPayload,
+  FPPSequenceListResponse,
   SitePowerRunResponse,
   ConfigWeatherDelayPayload,
   SetPrincipalPasswordRequest,
@@ -639,6 +647,26 @@ export function getSitePowerConfig(): Promise<SitePowerConfigResponse> {
 
 export function putSitePowerConfig(payload: ConfigSitePowerPayload): Promise<SitePowerConfigResponse> {
   return store.putSitePowerConfig(payload)
+}
+
+export function getEventsMQTTConfig(): Promise<EventsMQTTConfigResponse> {
+  return store.getEventsMQTTConfig()
+}
+
+export function putEventsMQTTConfig(payload: ConfigEventsMQTTPutPayload): Promise<EventsMQTTConfigResponse> {
+  return store.putEventsMQTTConfig(payload)
+}
+
+export function getSequenceTestConfig(showId: string): Promise<SequenceTestConfigResponse> {
+  return store.getSequenceTestConfig(showId)
+}
+
+export function listFPPSequences(): Promise<FPPSequenceListResponse> {
+  return store.listFPPSequences()
+}
+
+export function putSequenceTestConfig(showId: string, payload: ConfigSequenceTestPayload): Promise<SequenceTestConfigResponse> {
+  return store.putSequenceTestConfig(showId, payload)
 }
 
 export function runSitePower(which: 'on' | 'off'): Promise<SitePowerRunResponse> {
@@ -1269,6 +1297,18 @@ export function getPreviewGatewayConfig(): Promise<PreviewGatewayConfigResponse>
 
 export function putPreviewGatewayConfig(request: ConfigPreviewGatewayPutRequest): Promise<PreviewGatewayConfigResponse> {
   return store.putPreviewGatewayConfig(request)
+}
+
+export function listIntegrationBrokers(): Promise<IntegrationBrokersListResponse> {
+  return store.listIntegrationBrokers()
+}
+
+export function putIntegrationBroker(id: string, request: IntegrationBrokerPutRequest): Promise<IntegrationBrokerResponse> {
+  return store.putIntegrationBroker(id, request)
+}
+
+export function deleteIntegrationBroker(id: string): Promise<void> {
+  return store.deleteIntegrationBroker(id)
 }
 
 export function getPreviewCamera(id: string): Promise<PreviewCameraConfigResponse> {

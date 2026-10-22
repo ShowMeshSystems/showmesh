@@ -239,6 +239,16 @@ func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, ob
 		return decideEvidenceBroken(ctx, st, result, obs, runnerInstance, pin)
 	}
 
+	if result.Outcome != fppreconcile.OutcomeResolved {
+		dec, ok, err := decideSequenceTest(ctx, st, obs, runnerInstance, pin)
+		if err != nil {
+			return Decision{}, err
+		}
+		if ok {
+			return withFollowStop(dec, held), nil
+		}
+	}
+
 	switch result.Outcome {
 	case fppreconcile.OutcomeIdentityUnavailable:
 		return withFollowStop(Decision{State: StateIdentityUnavailable, Reason: result.Reason}, held), nil
@@ -282,6 +292,50 @@ func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, ob
 		return Decision{}, err
 	}
 	return withFollowStop(dec, held), nil
+}
+
+// decideSequenceTest activates the Cue the active show's sequence test
+// list maps obs's sequence filename to (ADR-067). ok is false when no
+// mapping applies or no node holds the Cue, including while a night is open.
+func decideSequenceTest(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (dec Decision, ok bool, err error) {
+	if obs.SequenceFilename == "" || runnerInstance == "" {
+		return Decision{}, false, nil
+	}
+	enabled, err := assetsync.SequenceTestingEnabled(ctx, st)
+	if err != nil {
+		return Decision{}, false, fmt.Errorf("cueactivate: sequence test: %w", err)
+	}
+	if !enabled {
+		return Decision{}, false, nil
+	}
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return Decision{}, false, fmt.Errorf("cueactivate: sequence test: resolve active show: %w", err)
+	}
+	if !active.Configured {
+		return Decision{}, false, nil
+	}
+	mappings, err := assetsync.SequenceTestMappings(ctx, st, active.ShowID)
+	if err != nil {
+		return Decision{}, false, fmt.Errorf("cueactivate: sequence test: %w", err)
+	}
+	cueID, mapped := mappings[obs.SequenceFilename]
+	if !mapped {
+		return Decision{}, false, nil
+	}
+	activations, err := resolveActivationsForCue(ctx, st, active, "", 0, "", cueID, obs, runnerInstance, pin)
+	if err != nil {
+		return Decision{}, false, err
+	}
+	// No node holds the test Cue, for example when none advertises cue.testtriggers.
+	if len(activations) == 0 {
+		return Decision{}, false, nil
+	}
+	return Decision{
+		State:       StateActivated,
+		Reason:      fmt.Sprintf("FPP is playing %s, which the sequence test list maps to cue %s", obs.SequenceFilename, cueID),
+		Activations: activations,
+	}, true, nil
 }
 
 // withFollowStop populates dec.FollowStop from held when dec's own tick

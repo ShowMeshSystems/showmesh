@@ -247,6 +247,9 @@ type SchemaConfigPreviewGatewayPutRequest = components['schemas']['ConfigPreview
 type SchemaConfigDashboardLayoutPutRequest = components['schemas']['ConfigDashboardLayoutPutRequest']
 type SchemaDashboardLayoutConfigResponse = components['schemas']['DashboardLayoutConfigResponse']
 type SchemaPreviewCameraConfigResponse = components['schemas']['PreviewCameraConfigResponse']
+type SchemaIntegrationBrokersListResponse = components['schemas']['IntegrationBrokersListResponse']
+type SchemaIntegrationBrokerResponse = components['schemas']['IntegrationBrokerResponse']
+type SchemaIntegrationBrokerPutRequest = components['schemas']['IntegrationBrokerPutRequest']
 type SchemaConfigPreviewNDIPutRequest = components['schemas']['ConfigPreviewNDIPutRequest']
 type SchemaPreviewNDIConfigResponse = components['schemas']['PreviewNDIConfigResponse']
 type SchemaPreviewGatewayConfigResponse = components['schemas']['PreviewGatewayConfigResponse']
@@ -341,7 +344,12 @@ type SchemaEmergencyStopConfigResponse = components['schemas']['EmergencyStopCon
 type SchemaConfigEmergencyStopPayload = components['schemas']['ConfigEmergencyStopPayload']
 type SchemaSitePowerConfigResponse = components['schemas']['SitePowerConfigResponse']
 type SchemaConfigSitePowerPayload = components['schemas']['ConfigSitePowerPayload']
+type SchemaSequenceTestConfigResponse = components['schemas']['SequenceTestConfigResponse']
+type SchemaConfigSequenceTestPayload = components['schemas']['ConfigSequenceTestPayload']
+type SchemaFPPSequenceListResponse = components['schemas']['FPPSequenceListResponse']
 type SchemaSitePowerRunResponse = components['schemas']['SitePowerRunResponse']
+type SchemaEventsMQTTConfigResponse = components['schemas']['EventsMQTTConfigResponse']
+type SchemaConfigEventsMQTTPutPayload = components['schemas']['ConfigEventsMQTTPutPayload']
 type SchemaConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
 
 /**
@@ -651,6 +659,36 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.putJson<SchemaPreviewGatewayConfigResponse>('/config/preview.gateway', request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/integration.broker`: the brokers an MQTT action may name, built-in first. Passwords are never returned. */
+  async listIntegrationBrokers(): Promise<SchemaIntegrationBrokersListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaIntegrationBrokersListResponse>('/config/integration.broker', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/integration.broker/{id}`. A field left out keeps the stored value; a null password clears it. */
+  async putIntegrationBroker(id: string, request: SchemaIntegrationBrokerPutRequest): Promise<SchemaIntegrationBrokerResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaIntegrationBrokerResponse>(`/config/integration.broker/${encodeURIComponent(id)}`, request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `DELETE /api/v1/config/integration.broker/{id}`. Refused while an action still names the broker. */
+  async deleteIntegrationBroker(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson(`/config/integration.broker/${encodeURIComponent(id)}`, { confirm: true }, controller.signal)
     } finally {
       this.endSideCall(controller)
     }
@@ -4216,6 +4254,56 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.putJson<SchemaSitePowerConfigResponse>('/config/show.sitepower', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/events.mqtt`: where coordinator events are published (ADR-068). */
+  async getEventsMQTTConfig(): Promise<SchemaEventsMQTTConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaEventsMQTTConfigResponse>('/config/events.mqtt', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/events.mqtt`: a partial update. */
+  async putEventsMQTTConfig(payload: SchemaConfigEventsMQTTPutPayload): Promise<SchemaEventsMQTTConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaEventsMQTTConfigResponse>('/config/events.mqtt', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.sequencetest/{id}`: one show's sequence test list. */
+  async getSequenceTestConfig(showId: string): Promise<SchemaSequenceTestConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaSequenceTestConfigResponse>(`/config/show.sequencetest/${encodeURIComponent(showId)}`, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/fpp/sequences`: the sequence files the configured FPPs hold. */
+  async listFPPSequences(): Promise<SchemaFPPSequenceListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPSequenceListResponse>('/fpp/sequences', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/show.sequencetest/{id}`: a full replacement. */
+  async putSequenceTestConfig(showId: string, payload: SchemaConfigSequenceTestPayload): Promise<SchemaSequenceTestConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaSequenceTestConfigResponse>(`/config/show.sequencetest/${encodeURIComponent(showId)}`, payload, controller.signal)
     } finally {
       this.endSideCall(controller)
     }

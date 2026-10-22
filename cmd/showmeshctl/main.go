@@ -78,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdEmergencyStop(rest, stdout, stderr, clock)
 	case "sitepower":
 		return cmdSitePower(rest, stdout, stderr, clock)
+	case "seqtest":
+		return cmdSeqTest(rest, stdout, stderr, clock)
 	case "weather-delay":
 		return cmdWeatherDelay(rest, stdout, stderr, clock)
 	case "resolume":
@@ -92,6 +94,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdFPPConnect(rest, stdout, stderr, clock)
 	case "fpp-mqtt":
 		return cmdFPPMQTT(rest, stdout, stderr, clock)
+	case "mqtt-broker":
+		return cmdMQTTBroker(rest, stdout, stderr, clock)
 	case "assets":
 		return cmdAssets(rest, stdout, stderr, clock)
 	case "cuecatalog":
@@ -108,6 +112,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdSystem(rest, stdout, stderr, clock)
 	case "release":
 		return cmdRelease(rest, stdout, stderr, clock)
+	case "events-mqtt":
+		return cmdEventsMQTT(rest, stdout, stderr, clock)
 	case "preview":
 		return cmdPreview(rest, stdout, stderr, clock)
 	case "version":
@@ -338,6 +344,10 @@ Commands:
                                        requires show:emergencystop:invoke)
   sitepower off                       System power off: run every shutdown sequence (test command,
                                        requires show:emergencystop:invoke)
+  seqtest get --show <id>             show a show's sequence test list and whether it runs now
+  seqtest set --show <id>             write a show's sequence test list from a JSON payload
+  seqtest sequences                   list the sequence files the configured FPPs hold
+                                       (write, full replacement, requires config:write)
   weather-delay start                 start a weather delay: nothing starts output until resumed
                                        (write, requires show:weatherdelay:invoke, no confirmation)
   weather-delay cancel-night          cancel the night for weather: the show will not resume
@@ -520,6 +530,13 @@ Commands:
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields
                             named on the command line (write, requires config:write)
+  mqtt-broker list          the MQTT brokers an MQTT action can use, built-in first (read)
+  mqtt-broker get <id>      show one MQTT broker (read)
+  mqtt-broker revisions <id>
+                            list one broker's saved changes, newest first (read)
+  mqtt-broker set <id> --url <url> [--username <name>] [--password-file <path>]
+                            add or change a broker (write, requires config:write)
+  mqtt-broker remove <id>   remove a broker no action uses (write, requires config:write)
   principal list                       list every principal (requires principal:read)
   principal create -name -kind -role [--password|--password-stdin]
                            create a principal (write, requires principal:write)
@@ -541,6 +558,9 @@ Commands:
   release settings set     change them (write); only the flags passed are changed
   release settings revisions
                            list every saved change, newest first
+  events-mqtt get          show where events are published: on or off, broker and topic prefix
+  events-mqtt set          change it (write); only the flags passed are changed
+  events-mqtt revisions    list every saved change, newest first
   preview list             the preview gateway state and every dashboard tile with its key
   preview snapshot <key> -o <file.jpg>
                            save the latest frame of one tile

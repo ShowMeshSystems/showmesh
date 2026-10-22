@@ -131,6 +131,25 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
+## 2026-10-21 (coordinator events published to a Home Assistant broker: ADR-068 build)
+
+**Goal:** make refused night commands and the rest of the event history reach a site's Home Assistant, per [ADR-068](../decisions/ADR-068-coordinator-events-are-published-to-an-integration-broker.md).
+
+**Completed:**
+
+- Config kind `events.mqtt` (`enabled`, `broker`, `topicPrefix`) with GET, PUT and revisions in `api/openapi.yaml`, `internal/coordinator/config/eventsmqtt.go` and `internal/coordinator/api/eventsmqttconfig.go`. A broker that is not a declared integration broker is refused, as is a prefix with `+`, `#` or a stray `/`.
+- Night events in `internal/coordinator/api/nightevents.go`: `night.command.refused`, `night.command.applied` and `night.readiness.completed`. Readiness is recorded in the same transaction as its result, including the automatic rerun inside Start night.
+- Forwarder `internal/coordinator/api/eventsmqttforwarder.go`: follows the event history by sequence number from the latest row at startup, publishes each row on `<prefix>/events/<category>` at QoS 1 and the night state retained on `<prefix>/night/state`, through the integration broker registry only. A failed publish drops the rest of that batch, so a broker that is down costs one five-second wait per poll.
+- `showmeshctl events-mqtt get|set|revisions` and a Settings tab, Home Assistant, built from the existing kit.
+
+**Decisions made:** none beyond ADR-068. The state payload nests readiness as `readiness.outcome` and `readiness.completedAt`.
+
+**Deferred:** nothing has run against a real Home Assistant or the rehearsal broker.
+
+**Verification gates:** run this session: Go tests for `internal/coordinator/...` and `cmd/showmeshctl`, `go vet`, `golangci-lint`, the full UI test suite, UI lint, typecheck and build. A host-process coordinator against a throwaway local Mosquitto showed a refused command arriving on `<prefix>/events/night.command.refused`, the retained night state read by a late subscriber, and an unchanged 409 response with the broker stopped. A Chromium run against that coordinator saved and reloaded the new tab. `make check` runs in CI on the pull request.
+
+---
+
 ## 2026-10-17 (one brightness ceiling for every FPP: ADR-062's coordinator, API, UI and CLI half)
 
 **Goal:** make brightness one setting for the whole display, held by the coordinator and followed by every FPP in `fpp.endpoints`, per [ADR-062](../decisions/ADR-062-brightness-is-one-setting-for-every-fpp.md) and contract section 2.8.

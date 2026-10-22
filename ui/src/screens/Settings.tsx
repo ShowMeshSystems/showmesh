@@ -4,11 +4,13 @@ import { useModelContext } from '../app/ModelContext'
 
 const TABS: readonly { path: string; label: string }[] = [
   { path: 'connections', label: 'Connections' },
+  { path: 'mqtt-brokers', label: 'MQTT brokers' },
   { path: 'delivery', label: 'Content delivery' },
   { path: 'recovery', label: 'Render recovery' },
   { path: 'weather-delay', label: 'Weather delay' },
   { path: 'emergency-stop', label: 'Emergency stop' },
   { path: 'site', label: 'Site settings' },
+  { path: 'home-assistant', label: 'Home Assistant' },
   { path: 'brightness', label: 'Brightness' },
   { path: 'dashboard', label: 'Dashboard' },
   { path: 'appearance', label: 'Appearance' },

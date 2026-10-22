@@ -73,6 +73,7 @@ var getResponseTypeOverrides = map[string]string{
 	"GET /system/versions":                 "systemVersionsResponse",
 	"GET /resolume/recovery":               "resolumeRecoveryResponse",
 	"GET /node-enrollments":                "nodeEnrollmentsResponse",
+	"GET /fpp/sequences":                   "fppSequenceListResponse",
 }
 
 // getResponseFieldExemptions is exemptWritePaths' convention mirrored for
