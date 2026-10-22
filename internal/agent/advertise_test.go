@@ -97,8 +97,20 @@ func TestPublishHelloTopicRetainQoSAndPayload(t *testing.T) {
 	if !hello.StartedAt.Equal(startedAt) {
 		t.Errorf("StartedAt = %v, want %v", hello.StartedAt, startedAt)
 	}
-	if len(hello.Capabilities) != 0 {
-		t.Errorf("Capabilities = %v, want empty (advertising a capability the agent does not have is exactly what this must never do)", hello.Capabilities)
+	if len(hello.Capabilities) != 1 || hello.Capabilities[0].ID != capability.CueTestTriggers || hello.Capabilities[0].Version != 1 {
+		t.Errorf("Capabilities = %v, want only cue.testtriggers v1 (no probed capability the agent does not have)", hello.Capabilities)
+	}
+}
+
+func TestPublishHelloAdvertisesCueTestTriggersOnce(t *testing.T) {
+	pub := newFakePublisher()
+	caps := capability.Set{{ID: "process.supervise", Version: 1}, {ID: capability.CueTestTriggers, Version: 1}}
+	if _, err := publishHello(context.Background(), pub, agentconfig.Config{NodeID: "media-03"}, "boot-1", time.Now(), caps, ""); err != nil {
+		t.Fatalf("publishHello() error = %v", err)
+	}
+	_, hello := decodeHello(t, pub.snapshot()[0].payload)
+	if len(hello.Capabilities) != 2 {
+		t.Fatalf("Capabilities = %v, want process.supervise and one cue.testtriggers", hello.Capabilities)
 	}
 }
 
@@ -252,8 +264,8 @@ func TestScheduleCapabilityDetectionStoresAndRepublishes(t *testing.T) {
 		t.Fatalf("len(calls) = %d, want 1 (the post-detection hello republish)", len(calls))
 	}
 	_, hello := decodeHello(t, calls[0].payload)
-	if len(hello.Capabilities) != 1 || hello.Capabilities[0].ID != "transport.ndi.send" {
-		t.Errorf("Capabilities = %v, want the one detected capability", hello.Capabilities)
+	if len(hello.Capabilities) != 2 || hello.Capabilities[0].ID != "transport.ndi.send" || hello.Capabilities[1].ID != capability.CueTestTriggers {
+		t.Errorf("Capabilities = %v, want the one detected capability plus cue.testtriggers", hello.Capabilities)
 	}
 }
 
@@ -435,8 +447,8 @@ func TestPublishAdvertisementReturnsPromptlyWhenCapabilityDetectionHangs(t *test
 		t.Errorf("first publish topic = %q, want hello topic %q", calls[0].topic, helloTopic)
 	}
 	_, hello := decodeHello(t, calls[0].payload)
-	if len(hello.Capabilities) != 0 {
-		t.Errorf("Capabilities = %v, want empty: no detection has completed yet at the moment this hello had to be published", hello.Capabilities)
+	if len(hello.Capabilities) != 1 || hello.Capabilities[0].ID != capability.CueTestTriggers {
+		t.Errorf("Capabilities = %v, want only cue.testtriggers: no detection has completed yet at the moment this hello had to be published", hello.Capabilities)
 	}
 
 	// The background detection goroutine must still be running (or about

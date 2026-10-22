@@ -1973,6 +1973,7 @@ func New(deps Dependencies, opts Options) *API {
 	// written to every FPP (ADR-062). fppbrightnessceiling.go and
 	// fpptransitiongain.go own everything past authorization.
 	mux.HandleFunc("GET /api/v1/fpp/brightness", h.readGuard(scopeFPPBrightnessRead, h.handleFPPBrightness))
+	mux.HandleFunc("GET /api/v1/fpp/sequences", h.readAnyGuard(fppSequencesReadScopes, h.handleFPPSequences))
 	mux.HandleFunc("PUT /api/v1/fpp/brightness/ceiling", h.writeGuard(&scopeFPPBrightnessCeiling, h.handleFPPSetBrightnessCeiling))
 	mux.HandleFunc("POST /api/v1/fpp/brightness/transition-gain", h.writeGuard(&scopeFPPTransitionGain, h.handleFPPTransitionGain))
 
@@ -2361,6 +2362,10 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/show.cue/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowCue))
 	mux.HandleFunc("GET /api/v1/config/show.cue/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowCueRevisions))
 	mux.HandleFunc("DELETE /api/v1/config/show.cue/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowCue))
+
+	// show.sequencetest (ADR-067): one show's sequence test list, id = show id.
+	mux.HandleFunc("GET /api/v1/config/show.sequencetest/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetSequenceTest))
+	mux.HandleFunc("PUT /api/v1/config/show.sequencetest/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutSequenceTest))
 
 	mux.HandleFunc("GET /api/v1/config/show.playlist", h.readAnyGuard(showConfigReadScopes, h.handleListShowPlaylists))
 	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylist))

@@ -603,6 +603,36 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+  /fpp/sequences:
+    get:
+      operationId: listFPPSequences
+      summary: List the sequence files the configured FPPs hold
+      description: >-
+        Behind `fpp:read` or `config:write`. The coordinator reads each
+        FPP in `fpp.endpoints` over FPP's own API and returns the
+        de-duplicated union of their sequence files, sorted by name, with
+        the FPP instances that hold each. `instances` has one entry per
+        configured FPP; one that could not be read carries an operator
+        sentence in `error` and contributes no files. Read only: nothing
+        is written to FPP.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPSequenceListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /fpp/brightness:
     get:
       operationId: getFPPBrightness
@@ -6681,6 +6711,85 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.sequencetest/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The show id. Each show has at most one sequence test list.
+        schema:
+          type: string
+    get:
+      operationId: getSequenceTestConfig
+      summary: A show's sequence test list (ADR-067)
+      description: >-
+        Requires `show:macro:run` or `config:write`. Never `404`s: with
+        nothing written it answers `revision` `0`, `source` `"default"`
+        and no entries. `running` is true only while this show is the
+        active show and no night session is open; otherwise
+        `notRunningReason` says why.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SequenceTestConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putSequenceTestConfig
+      summary: Set a show's sequence test list
+      description: >-
+        Requires `config:write`. A full replacement. While this show is
+        active and no night session is open, FPP playing a listed
+        sequence file runs the mapped Cue in full, and nodes receive the
+        file name as a trigger of that Cue. Every Cue must belong to the
+        show. A file name already played by a different Cue, from a
+        playlist entry of the show or another row, is refused. Optionally
+        carries `If-Match`/`If-None-Match`.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigSequenceTestPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SequenceTestConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /site-power/on:
@@ -17749,6 +17858,100 @@ components:
           format: int64
         payload:
           $ref: "#/components/schemas/ConfigSitePowerPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+    ConfigSequenceTestEntry:
+      type: object
+      additionalProperties: false
+      required: [sequenceFilename, cue]
+      properties:
+        sequenceFilename:
+          type: string
+          maxLength: 255
+          description: The FPP sequence file name, without a directory.
+        cue:
+          type: string
+          description: A show.cue id of the same show.
+    ConfigSequenceTestPayload:
+      type: object
+      additionalProperties: false
+      description: The show.sequencetest payload. `show` may be omitted on write and defaults to the path id.
+      required: [show, entries]
+      properties:
+        show:
+          type: string
+        entries:
+          type: array
+          maxItems: 256
+          items:
+            $ref: "#/components/schemas/ConfigSequenceTestEntry"
+    FPPSequenceListResponse:
+      type: object
+      description: The body of GET /fpp/sequences.
+      required: [serverTime, sequences, instances]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        sequences:
+          type: array
+          items:
+            type: object
+            required: [filename, instances]
+            properties:
+              filename:
+                type: string
+                description: >-
+                  The sequence filename as FPP names it, with a subfolder
+                  file as a relative path.
+              instances:
+                type: array
+                description: The FPP instance ids that hold this file.
+                items:
+                  type: string
+        instances:
+          type: array
+          items:
+            type: object
+            required: [id]
+            properties:
+              id:
+                type: string
+              error:
+                type: string
+                description: >-
+                  Present only when this FPP's sequence list could not be
+                  read: an operator sentence.
+    SequenceTestConfigResponse:
+      type: object
+      additionalProperties: false
+      required: [serverTime, kind, id, revision, payload, running, updatedAt, createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        id:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        payload:
+          $ref: "#/components/schemas/ConfigSequenceTestPayload"
+        running:
+          type: boolean
+          description: Whether the list runs now. True only while this show is active and no night session is open.
+        notRunningReason:
+          type: string
+          description: Why the list does not run now. Absent when running is true.
         updatedAt:
           type: string
           format: date-time

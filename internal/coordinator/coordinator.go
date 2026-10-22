@@ -43,6 +43,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/macro"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/nightstatepush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/preview"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/signingkey"
@@ -341,6 +342,7 @@ func Run() int {
 		// hello-triggered convergence, one config surface over; see
 		// internal/coordinator/fppconnectpush.
 		go fppconnectpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger, fppConnectStatus)
+		go nightstatepush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
 	}
 
 	// assetSync is constructed further down (it needs bm itself as its
@@ -1528,6 +1530,10 @@ func Run() int {
 	spawnBackground(func() {
 		runShowMode(ctx, showModeSrc, resolumeMgr, bm, time.Now, logger, showModeReconcileInterval)
 	})
+
+	// ADR-067: nodes gate sequence test triggers on this night flag.
+	nightStateLoop := &nightstatepush.Loop{Store: st, Pub: bm, Now: time.Now, Logger: logger, Poll: 2 * time.Second, Resend: time.Minute}
+	spawnBackground(func() { nightStateLoop.Run(ctx) })
 
 	// runWeatherDelay owns ADR-053 decision 2's own republish loop
 	// (weatherdelay.go): it re-publishes the current stored weather delay

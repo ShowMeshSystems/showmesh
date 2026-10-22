@@ -78,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdEmergencyStop(rest, stdout, stderr, clock)
 	case "sitepower":
 		return cmdSitePower(rest, stdout, stderr, clock)
+	case "seqtest":
+		return cmdSeqTest(rest, stdout, stderr, clock)
 	case "weather-delay":
 		return cmdWeatherDelay(rest, stdout, stderr, clock)
 	case "resolume":
@@ -339,6 +341,10 @@ Commands:
                                        requires show:emergencystop:invoke)
   sitepower off                       System power off: run every shutdown sequence (test command,
                                        requires show:emergencystop:invoke)
+  seqtest get --show <id>             show a show's sequence test list and whether it runs now
+  seqtest set --show <id>             write a show's sequence test list from a JSON payload
+  seqtest sequences                   list the sequence files the configured FPPs hold
+                                       (write, full replacement, requires config:write)
   weather-delay start                 start a weather delay: nothing starts output until resumed
                                        (write, requires show:weatherdelay:invoke, no confirmation)
   weather-delay cancel-night          cancel the night for weather: the show will not resume
