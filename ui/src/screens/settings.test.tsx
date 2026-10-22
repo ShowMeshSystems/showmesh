@@ -175,8 +175,8 @@ describe('Settings tab strip', () => {
     renderAt('/settings/connections')
 
     const nav = screen.getByRole('navigation', { name: 'Settings tabs' })
-<<<<<<< HEAD
->>>>>>> origin/main
+    const tabs = within(nav).getAllByRole('link')
+    expect(tabs).toHaveLength(16)
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Connections',
       'MQTT brokers',
