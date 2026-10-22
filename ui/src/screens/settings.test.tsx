@@ -179,6 +179,7 @@ describe('Settings tab strip', () => {
     expect(tabs).toHaveLength(15)
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Connections',
+      'MQTT brokers',
       'Content delivery',
       'Render recovery',
       'Weather delay',

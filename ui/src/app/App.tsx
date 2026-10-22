@@ -30,6 +30,7 @@ import { ShowsNightSession } from '../screens/ShowsNightSession'
 import { Access } from '../screens/Access'
 import { Settings } from '../screens/Settings'
 import { SettingsConnections } from '../screens/SettingsConnections'
+import { SettingsMQTTBrokers } from '../screens/SettingsMQTTBrokers'
 import { SettingsDelivery } from '../screens/SettingsDelivery'
 import { SettingsRecovery } from '../screens/SettingsRecovery'
 import { SettingsWeatherDelay } from '../screens/SettingsWeatherDelay'
@@ -132,6 +133,7 @@ export default function App() {
             <Route path="settings" element={<Settings />}>
               <Route index element={<Navigate replace to="/settings/connections" />} />
               <Route path="connections" element={<SettingsConnections />} />
+              <Route path="mqtt-brokers" element={<SettingsMQTTBrokers />} />
               <Route path="delivery" element={<SettingsDelivery />} />
               <Route path="recovery" element={<SettingsRecovery />} />
               <Route path="weather-delay" element={<SettingsWeatherDelay />} />
