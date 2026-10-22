@@ -96,17 +96,7 @@ var tuningKnobEnvVars = map[string]string{
 // these, which live in a sibling file of the same package. Each entry
 // here is a known, open gap — reported rather than silently promoted to
 // startTimeEnvVars with a reason that would not survive scrutiny.
-var knownGapEnvVars = map[string]string{
-	"SHOWMESH_INTEGRATION_BROKERS": "genuinely operator-facing (Step 9 wave 2: declares the external MQTT " +
-		"brokers a show.action's mqtt target may name) and fails decision 2's own test — an operator needs to " +
-		"add a broker without a restart — but it lives in integrationbrokers.go, outside Track G's audited " +
-		"config.go scope, and was never converted to a store-backed kind. Recorded as a gap, not endorsed as " +
-		"start-time; see docs/private/DECISION-QUEUE.md.",
-	"SHOWMESH_INTEGRATION_BROKER_": "not a variable itself but the literal prefix integrationbrokers.go " +
-		"concatenates into SHOWMESH_INTEGRATION_BROKER_<ID>_USERNAME/_PASSWORD, the per-broker credentials of " +
-		"the SHOWMESH_INTEGRATION_BROKERS family recorded above — the same gap, one entry per literal the " +
-		"sweep can see",
-}
+var knownGapEnvVars = map[string]string{}
 
 // retiredEnvVars is ADR-039 decision 3's group: a variable a store-backed
 // kind has replaced. Each name here is read exactly twice in the whole
@@ -131,6 +121,8 @@ var retiredEnvVars = map[string]string{
 	"SHOWMESH_ASSET_CONTENT_BASE_URL":   "Track G seam G-4's migration to the assets.settings store-backed kind",
 	"SHOWMESH_ASSET_SYNC_INTERVAL":      "Track G seam G-4's migration to the assets.settings store-backed kind",
 	"SHOWMESH_ASSET_INVENTORY_INTERVAL": "Track G seam G-4's migration to the assets.settings store-backed kind",
+	"SHOWMESH_INTEGRATION_BROKERS":      "migrates once to the integration.broker store-backed kind",
+	"SHOWMESH_INTEGRATION_BROKER_":      "the literal prefix of SHOWMESH_INTEGRATION_BROKER_<ID>_USERNAME/_PASSWORD, migrated with SHOWMESH_INTEGRATION_BROKERS",
 	"SHOWMESH_RELEASE_CHECK":            "never in a release; read at startup only so a coordinator that ran a pre-merge build keeps its setting in release.settings",
 	"SHOWMESH_RELEASE_CHECK_INTERVAL":   "never in a release; read at startup only so a coordinator that ran a pre-merge build keeps its setting in release.settings",
 }

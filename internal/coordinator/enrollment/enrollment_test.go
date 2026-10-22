@@ -130,7 +130,7 @@ func runRenderACL(t *testing.T, dir string) error {
 
 func TestRenderACLMatchesScriptByteForByte(t *testing.T) {
 	passwd := "coordinator:$7$101$a$b\nfpp:$7$101$a$b\nhealthcheck:$7$101$a$b\nrender-01:$7$101$a$b\n" +
-		"observer:$7$101$a$b\naudio-node-2:$7$101$a$b\n\nx9:$7$101$a$b\ntrailing-no-newline:$7$101$a$b"
+		"observer:$7$101$a$b\nintegration:$7$101$a$b\naudio-node-2:$7$101$a$b\n\nx9:$7$101$a$b\ntrailing-no-newline:$7$101$a$b"
 	dir := scriptSandbox(t, passwd)
 	if err := runRenderACL(t, dir); err != nil {
 		t.Fatalf("script --render-acl failed: %v", err)
@@ -152,6 +152,9 @@ func TestRenderACLMatchesScriptByteForByte(t *testing.T) {
 	}
 	if !bytes.Contains(fromGo, []byte("user render-01\n")) || bytes.Contains(fromGo, []byte("user trailing-no-newline")) {
 		t.Fatal("fixture did not exercise the node block or the unterminated last line")
+	}
+	if bytes.Count(fromGo, []byte("user integration\n")) != 1 || !bytes.Contains(fromGo, []byte("topic readwrite showmesh-actions/#")) {
+		t.Fatal("the integration login must keep only its fixed showmesh-actions/# grant, never an agent block")
 	}
 }
 

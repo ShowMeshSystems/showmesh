@@ -648,6 +648,14 @@ The owner ruled the narrow role unhelpful: a show network is dedicated and
 isolated, and nothing on it needs hiding from FPP. Accepted: any FPP player, or
 anyone holding the shared FPP login, can command any FPP player on the broker.
 
+**Amended 2026-10-22: an `integration` role carries MQTT actions on the built-in
+broker.** The coordinator creates this login itself at startup and keeps its
+password in the credentials table. It may read and write `showmesh-actions/#`
+and nothing else, so an operator-authored action topic can never publish a node
+command or an FPP command. The owner ruled the built-in broker a valid MQTT
+action target once it bridges to Home Assistant; `STEP-9-SPEC.md` section 2.10
+records the change.
+
 **Broker credentials are generated per deployment at first run, never shipped in
 `deploy/`.** A credential set authored into the bundle would be identical in
 every installation, making the ACL decorative, which is the failure ADR-021

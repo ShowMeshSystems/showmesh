@@ -547,24 +547,15 @@ func Run() int {
 	fppRunner.Add(nodeclock.New(clockStore), nodeclock.DefaultPollInterval)
 	fppRunner.Add(nodefallback.New(fallbackStore), nodefallback.DefaultPollInterval)
 
-	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
-	// 5): one *broker.BrokerManager per declared external MQTT broker
-	// (SHOWMESH_INTEGRATION_BROKERS), registered under its own identifier.
-	// Built here, alongside every other connection this coordinator owns,
-	// and BEFORE apiDeps for the identical reason fppRunner is: the macro
-	// executor built below needs a live registry to hand its own
-	// Dependencies.Brokers field, and apiDeps.Macros needs the executor.
-	// The control-plane broker (bm, above) is never registered here under
-	// any identifier — see buildIntegrationBrokerRegistry's own doc
-	// comment for why that is a property of its INPUT, not a check it
-	// performs.
-	integrationBrokers, integrationBrokerManagers, err := buildIntegrationBrokerRegistry(ctx, cfg, logger)
-	if err != nil {
-		logger.Error("failed to build integration broker registry", "error", err)
-		_ = bm.Disconnect(ctx)
-		_ = st.Close()
-		return 1
-	}
+	// MQTT action brokers: the built-in broker through its own integration
+	// login, plus every stored integration.broker. Connected before apiDeps
+	// because the macro executor and the action dispatcher share the registry.
+	brokerFiles := enrollment.NewBrokerFiles(cfg.BrokerConfigDir)
+	builtInBroker := ensureBuiltInIntegrationBroker(ctx, cfg, brokerFiles, st, logger)
+	envBrokerFallback := migrateIntegrationBrokersFromEnv(ctx, st, identitySvc, cfg.IntegrationBrokers, time.Now, logger)
+	integrationBrokerSet := newIntegrationBrokerSet(st, cfg.MQTTClientID, builtInBroker, envBrokerFallback, logger)
+	integrationBrokerSet.reconcile(ctx)
+	integrationBrokers := integrationBrokerSet.registry
 
 	// Track D seam D-2/B: the stored composition's tracked-object set
 	// (internal/coordinator/collector/resolume's CompositionStore),
@@ -716,7 +707,7 @@ func Run() int {
 	// underneath it, see that type's own doc comment.
 	weatherDelayNWSStatus := api.NewWeatherDelayNWSStatus()
 	coordinatorPublicKey := base64.StdEncoding.EncodeToString(signingMgr.PublicKey())
-	enrollmentSvc := enrollment.NewService(st, identitySvc, enrollment.NewBrokerFiles(cfg.BrokerConfigDir), enrollment.Config{
+	enrollmentSvc := enrollment.NewService(st, identitySvc, brokerFiles, enrollment.Config{
 		BrokerMode: cfg.BrokerMode, NodeBrokerURL: cfg.NodeBrokerURL, PublicURL: cfg.PublicURL,
 		NodeMQTTUsername: cfg.NodeMQTTUsername, NodeMQTTPassword: cfg.NodeMQTTPassword,
 		CoordinatorPublicKey: coordinatorPublicKey,
@@ -1080,17 +1071,9 @@ func Run() int {
 		// round trip, falling back to that same cadence whenever the
 		// nudge is suppressed or fails" against api.noFPPPollNudger's
 		// no-op default.
-		Nudger: fppRunnerNudger{runner: fppRunner},
-		// IntegrationBrokers is Step 9's own dependency (wave 2 shared
-		// contract section 5): the declared set show.action's own mqtt
-		// target write-time validation checks a broker identifier
-		// against (showconfig.go's decodeMQTTTarget, one layer up in
-		// internal/coordinator/config). This is the SAME cfg.IntegrationBrokers
-		// buildIntegrationBrokerRegistry just built actual connections
-		// from, above — the validation set and the connection set can
-		// never disagree about which identifiers exist, because both
-		// read the identical field.
-		IntegrationBrokers: cfg.IntegrationBrokers,
+		Nudger:                      fppRunnerNudger{runner: fppRunner},
+		IntegrationBrokers:          integrationBrokerSet,
+		IntegrationBrokersEnvVarSet: len(cfg.IntegrationBrokers) > 0,
 		// The SAME *broker.Registry macro.Dependencies.Brokers (below)
 		// dispatches an mqtt-integration show.macro step through — see
 		// [api.Dependencies.MQTTBrokers]'s own doc comment for why wiring
@@ -1566,6 +1549,9 @@ func Run() int {
 	spawnBackground(func() {
 		previewSvc.Run(ctx)
 	})
+	spawnBackground(func() {
+		integrationBrokerSet.Run(ctx)
+	})
 
 	// The loops above are running and the listener starts now, so this is
 	// when a plugin can first reach this run of the coordinator.
@@ -1626,14 +1612,7 @@ func Run() int {
 		shutdownDeadline = time.Now().Add(10 * time.Second)
 	}
 	stopErr := runShutdown(shutdownCtx, shutdownDeadline, macroExecutor.Stop, func(disconnectCtx context.Context) {
-		// Step 9: every integration broker connection this coordinator
-		// opened (buildIntegrationBrokerRegistry, above) is torn down
-		// alongside the control-plane broker immediately below.
-		for _, ibm := range integrationBrokerManagers {
-			if err := ibm.Disconnect(disconnectCtx); err != nil {
-				logger.Warn("integration broker disconnect error", "error", err)
-			}
-		}
+		integrationBrokerSet.Close(disconnectCtx)
 
 		if err := bm.Disconnect(disconnectCtx); err != nil {
 			logger.Warn("mqtt disconnect error", "error", err)

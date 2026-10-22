@@ -32,7 +32,7 @@ usage: $0 --host <home-assistant-broker> --user <login> [--password-file <file>]
        $0 --remove
 
 Connects the built-in ShowMesh broker to a Home Assistant broker and carries
-falcon/player/# in both directions.
+falcon/player/# and showmesh-actions/# in both directions.
 
   --host <host>            Home Assistant broker address (required)
   --port <port>            Home Assistant broker port (default 1883)
@@ -164,6 +164,8 @@ bridge_protocol_version mqttv311
 topic falcon/player/# both 0
 # FPP's Home Assistant discovery announcements, when FPP publishes them here.
 topic homeassistant/# out 0
+# ShowMesh MQTT actions on the built-in broker, and Home Assistant's replies.
+topic showmesh-actions/# both 0
 CONF
   if [ "$SHARE_SHOWMESH" = yes ]; then
     printf '\n# ShowMesh node state, read-only for Home Assistant dashboards.\ntopic showmesh/# out 0\n'
