@@ -102,9 +102,11 @@ func (h *handlers) nightPowerDownSequences(ctx context.Context, rec store.NightS
 	return out, nil
 }
 
-// nightAdvancePowerOff is the stopped-state tick: it advances a pending
-// power down, and once none is pending, the end session actions.
+// nightAdvancePowerOff is the stopped-state tick: it resends an
+// unconfirmed stop, advances a pending power down, and once none is
+// pending, the end session actions.
 func (h *handlers) nightAdvancePowerOff(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	h.nightResendUnconfirmedStop(ctx, now, rec)
 	if rec.ShutdownIntent != "power-down" || rec.PowerPhase != nightPowerPhaseConfiguredNotDispatched {
 		h.nightAdvanceEndSessionActions(ctx, now, rec)
 		return

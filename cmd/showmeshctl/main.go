@@ -315,7 +315,8 @@ Commands:
   night fade-out                      fade the active presentation out and stop FPP (write,
                                        requires night:command; accepted even while degraded)
   night power-down                    close the session after playback and the fade have stopped
-                                       (write, requires night:command; accepted even while degraded)
+                                       (write, requires night:command; accepted even while degraded;
+                                       --force skips the wait but not a blocking interlock)
   night end-session                   PROVISIONAL: abandon the current session, reaching "stopped"
                                        without clearing its degraded record (write, requires
                                        night:command; the only lifecycle command accepted while

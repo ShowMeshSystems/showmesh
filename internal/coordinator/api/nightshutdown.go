@@ -10,17 +10,25 @@ import (
 )
 
 // The fading-out tick: run the configured presentation fade/blackout
-// cues, issue a real FPP stop, and reach stopped only on fresh idle
-// evidence that postdates that stop (RESTING-MODE.md §4.6/§4.7).
+// cues, issue a real FPP stop, and reach stopped on fresh idle evidence
+// that postdates that stop. A power down reaches stopped without that
+// evidence once the confirm deadline passes (RESTING-MODE.md §4.6/§4.7,
+// ADR-069).
 
 // nightAnchorPurposeShutdownStop marks the anchor that records the
 // shutdown stop's own dispatch and its confirming evidence.
 const nightAnchorPurposeShutdownStop = "shutdown-stop"
 
 // nightShutdownStopConfirmDeadline bounds how long fading-out waits for
-// idle evidence after the stop reached the wire. Past it the session
-// degrades with a stated reason; it never reports stopped unconfirmed.
+// idle evidence after the stop reached the wire. Past it a fade-out-only
+// night degrades with a stated reason; a power down reaches stopped with
+// the stop recorded as unconfirmed, and the stop is resent on this cadence.
 const nightShutdownStopConfirmDeadline = 90 * time.Second
+
+const (
+	nightStopUnconfirmedFact = "FPP %s did not confirm the stop, so power down started anyway. The stop is sent again until FPP reports idle."
+	nightStopForcedFact      = "Power down was forced without waiting for FPP %s to stop. The stop is sent again until FPP reports idle."
+)
 
 // nightShutdownStopRetryBackoff bounds how often a pre-wire refusal of
 // the stop is retried. The stop keeps one stable idempotency key, so a
@@ -78,7 +86,12 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 		anchor = nightContentAnchor{Purpose: nightAnchorPurposeShutdownStop, FPPInstanceID: instanceID}
 	}
 
+	powerDown := rec.ShutdownIntent == "power-down"
 	if anchor.DispatchedAt.IsZero() {
+		if powerDown && !now.Before(rec.StateEnteredAt.Add(hold+nightShutdownStopConfirmDeadline)) {
+			h.nightReachStoppedStopUnconfirmed(ctx, now, rec, instanceID, nil)
+			return
+		}
 		if !h.nightShutdownRetryDue(anchor, now) {
 			return
 		}
@@ -87,11 +100,16 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 	}
 
 	obs := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, anchor.DispatchedAt, now)
-	if obs.Current && obs.Status == fppStatusValueIdle && obs.PlaylistCurrent && obs.Playlist == "" {
+	if nightPlaybackIdle(obs) {
 		h.nightReachStopped(ctx, now, rec)
 		return
 	}
 	if now.Sub(anchor.DispatchedAt) < nightShutdownStopConfirmDeadline {
+		return
+	}
+	if powerDown {
+		sentAt := anchor.DispatchedAt
+		h.nightReachStoppedStopUnconfirmed(ctx, now, rec, anchor.FPPInstanceID, &sentAt)
 		return
 	}
 	if !rec.Degraded {
@@ -206,7 +224,7 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 	next.Source = outcome.OutcomeReason
 	if outcome.Outcome == "confirmed" {
 		obs := nightObservePlayback(ctx, h.deps.Observations, instanceID, dispatchedAt, now)
-		if obs.Current && obs.Status == fppStatusValueIdle && obs.PlaylistCurrent && obs.Playlist == "" {
+		if nightPlaybackIdle(obs) {
 			h.nightReachStopped(ctx, now, rec)
 			return
 		}
@@ -214,9 +232,32 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 	h.nightCommitShutdownAnchorFor(ctx, now, rec, next)
 }
 
-// nightReachStopped is the only path to stopped that is not operator
-// recovery: FPP has been observed idle with no playlist after the stop.
+// nightPlaybackIdle is the stop's confirming evidence: FPP idle with no playlist.
+func nightPlaybackIdle(obs nightPlaybackObservation) bool {
+	return obs.Current && obs.Status == fppStatusValueIdle && obs.PlaylistCurrent && obs.Playlist == ""
+}
+
+// nightReachStopped is the confirmed path to stopped: FPP has been
+// observed idle with no playlist after the stop.
 func (h *handlers) nightReachStopped(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	h.nightReachStoppedWith(ctx, now, rec, "")
+}
+
+// nightReachStoppedStopUnconfirmed reaches stopped for a power down whose
+// stop FPP never confirmed. sentAt is when the stop last reached FPP, or nil.
+func (h *handlers) nightReachStoppedStopUnconfirmed(ctx context.Context, now time.Time, rec store.NightSessionRecord, instanceID string, sentAt *time.Time) {
+	h.logWarn("night loop: power down reached stopped without FPP confirming the stop", "sessionId", rec.ID, "instanceId", instanceID)
+	h.nightReachStoppedWith(ctx, now, rec, encodeNightBoundary(nightStopUnconfirmedBoundary(nightStopUnconfirmedFact, instanceID, sentAt)))
+}
+
+func nightStopUnconfirmedBoundary(fact, instanceID string, sentAt *time.Time) nightBoundary {
+	return nightBoundary{
+		State: nightBoundaryStateUnknown, Kind: nightBoundaryKindStopUnconfirmed, Reason: fmt.Sprintf(fact, instanceID),
+		FPPInstanceID: instanceID, StopSentAt: sentAt, StopAttemptedAt: sentAt,
+	}
+}
+
+func (h *handlers) nightReachStoppedWith(ctx context.Context, now time.Time, rec store.NightSessionRecord, boundaryJSON string) {
 	// Read OUTSIDE nightCommit's own short transaction, matching every
 	// other pinned-payload read in this file: this is a plain read, never
 	// held across the store's single connection alongside a write.
@@ -234,9 +275,86 @@ func (h *handlers) nightReachStopped(ctx context.Context, now time.Time, rec sto
 		cur.ArmedShowID = ""
 		cur.ShowCommitted = false
 		cur.ContentAnchorJSON = ""
-		cur.BoundaryJSON = ""
+		cur.BoundaryJSON = boundaryJSON
 		if cur.ShutdownIntent == "power-down" && cur.PowerPhase == "" {
 			cur.PowerPhase = powerPhase
+		}
+		return cur
+	})
+}
+
+// nightResendUnconfirmedStop is the stopped tick's stop resend: while the
+// stop is unconfirmed it is sent again every confirm deadline, and the
+// record clears once FPP reports idle after the last send.
+func (h *handlers) nightResendUnconfirmedStop(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	b, ok := decodeNightBoundary(rec.BoundaryJSON)
+	if !ok || b.Kind != nightBoundaryKindStopUnconfirmed || b.FPPInstanceID == "" {
+		return
+	}
+	if b.StopSentAt != nil {
+		if nightPlaybackIdle(nightObservePlayback(ctx, h.deps.Observations, b.FPPInstanceID, *b.StopSentAt, now)) {
+			h.nightCommitStopResend(ctx, now, rec, nil)
+			return
+		}
+		if now.Sub(*b.StopSentAt) < nightShutdownStopConfirmDeadline {
+			return
+		}
+	}
+	if b.StopAttemptedAt != nil && now.Sub(*b.StopAttemptedAt) < nightShutdownStopRetryBackoff {
+		return
+	}
+
+	next := b
+	attemptedAt := now
+	next.StopAttemptedAt = &attemptedAt
+	outcome, problem, err := h.dispatchFPPCommand(ctx, now, FPPCommandInput{
+		InstanceID:                  b.FPPInstanceID,
+		Action:                      fppActionStopPlaylist,
+		IdempotencyKey:              nightStopResendIdempotencyKey(rec, b.StopAttemptedAt),
+		Issuer:                      nightControllerIssuer(rec),
+		NeverWithholdOnAuditFailure: true,
+	})
+	switch {
+	case err != nil:
+		h.logWarn("night loop: stop resend dispatch failed", "sessionId", rec.ID, "instanceId", b.FPPInstanceID, "error", err)
+	case problem != nil:
+		h.logWarn("night loop: stop resend was held back", "sessionId", rec.ID, "instanceId", b.FPPInstanceID, "reason", problem.Detail)
+	case outcome.DispatchFailed:
+		h.logWarn("night loop: stop resend did not reach FPP", "sessionId", rec.ID, "instanceId", b.FPPInstanceID, "reason", outcome.OutcomeReason)
+	default:
+		sentAt := now
+		if outcome.DispatchedAt != nil {
+			sentAt = *outcome.DispatchedAt
+		}
+		next.StopSentAt = &sentAt
+		if outcome.Outcome == "confirmed" && nightPlaybackIdle(nightObservePlayback(ctx, h.deps.Observations, b.FPPInstanceID, sentAt, now)) {
+			h.nightCommitStopResend(ctx, now, rec, nil)
+			return
+		}
+	}
+	h.nightCommitStopResend(ctx, now, rec, &next)
+}
+
+// nightStopResendIdempotencyKey is stable for one resend attempt and new
+// for the next, keyed by when the previous attempt was made.
+func nightStopResendIdempotencyKey(rec store.NightSessionRecord, prevAttempt *time.Time) string {
+	var prev int64
+	if prevAttempt != nil {
+		prev = prevAttempt.UnixNano()
+	}
+	return fmt.Sprintf("night-stop:%s:%d:resend:%d", rec.ID, rec.Cycle, prev)
+}
+
+// nightCommitStopResend persists the resend state, or clears it when next
+// is nil, only while the session still carries the unconfirmed stop.
+func (h *handlers) nightCommitStopResend(ctx context.Context, now time.Time, rec store.NightSessionRecord, next *nightBoundary) {
+	h.nightCommit(ctx, now, rec.ID, nightStateStopped, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		if b, ok := decodeNightBoundary(cur.BoundaryJSON); !ok || b.Kind != nightBoundaryKindStopUnconfirmed {
+			return cur
+		}
+		cur.BoundaryJSON = ""
+		if next != nil {
+			cur.BoundaryJSON = encodeNightBoundary(*next)
 		}
 		return cur
 	})

@@ -99,6 +99,10 @@ type nightBoundary struct {
 	// once the episode ends (a fresh boundary write never carries it
 	// forward). See nightShowLaunchStaleNudgeWindow.
 	StaleNudgedAt *time.Time `json:"staleNudgedAt,omitempty"`
+	// The stop resend's state on a stopped power-down whose FPP stop is unconfirmed.
+	FPPInstanceID   string     `json:"fppInstanceId,omitempty"`
+	StopSentAt      *time.Time `json:"stopSentAt,omitempty"`
+	StopAttemptedAt *time.Time `json:"stopAttemptedAt,omitempty"`
 }
 
 const (
@@ -123,6 +127,9 @@ const (
 	// armed boundary) or the clock-backstep check: rule 3's own
 	// load-bearing invalidation, never retried automatically.
 	nightBoundaryKindContradiction = "contradiction"
+	// nightBoundaryKindStopUnconfirmed marks a stopped power-down whose FPP
+	// stop is unconfirmed; the stopped tick resends the stop until idle.
+	nightBoundaryKindStopUnconfirmed = "stop-unconfirmed"
 	// nightBoundaryKindUnresolvedAsset marks an invalid boundary written
 	// when the resting FSEQ's own duration could not be resolved at all
 	// (nightResolveFSEQDuration failure). This never reaches the
