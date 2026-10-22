@@ -308,8 +308,9 @@ func (r Role) Scopes() []Scope {
 		// FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.1). ScopeFPPFallback
 		// grows this bundle by one more, for the identical reason: the
 		// same installed plugin principal is the one caller ADR-048's
-		// fallback-program routes exist for.
-		return []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve, ScopeFPPFallback}
+		// fallback-program routes exist for. ScopeShowActionInvoke is the
+		// installed plugin also invoking single actions from an FPP command.
+		return []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve, ScopeFPPFallback, ScopeShowActionInvoke}
 	case RoleRecovery:
 		return []Scope{ScopeResolumeAction}
 	case RoleNode:

@@ -107,6 +107,11 @@ type Entry struct {
 	// array rather than one producing null and the other [] (matching
 	// AssetHashes' own determinism rule below).
 	Triggers []string `json:"triggers"`
+
+	// TestTriggers are sorted sequence test filenames (ADR-067), honored
+	// only while the node's night flag is closed. Omitted when empty so a
+	// catalog without test mappings keeps the revision older agents compute.
+	TestTriggers []string `json:"testTriggers,omitempty"`
 }
 
 // RevisionInput is EXACTLY what the catalog revision hash covers (H3 spec

@@ -29,6 +29,7 @@ func nightControlTestDeps(svc identity.Service, st *store.Store) (Dependencies, 
 	obs := &fakeObservationLister{}
 	deps.Observations = obs
 	deps.NightSessions = st
+	deps.WeatherDelayEvents = st
 	return deps, obs
 }
 

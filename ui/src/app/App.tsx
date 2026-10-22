@@ -25,14 +25,17 @@ import { ShowsCues } from '../screens/ShowsCues'
 import { ShowsAssets } from '../screens/ShowsAssets'
 import { ShowsPresentation } from '../screens/ShowsPresentation'
 import { ShowsAutomation } from '../screens/ShowsAutomation'
+import { ShowsSequenceTesting } from '../screens/ShowsSequenceTesting'
 import { ShowsNightSession } from '../screens/ShowsNightSession'
 import { Access } from '../screens/Access'
 import { Settings } from '../screens/Settings'
 import { SettingsConnections } from '../screens/SettingsConnections'
+import { SettingsMQTTBrokers } from '../screens/SettingsMQTTBrokers'
 import { SettingsDelivery } from '../screens/SettingsDelivery'
 import { SettingsRecovery } from '../screens/SettingsRecovery'
 import { SettingsWeatherDelay } from '../screens/SettingsWeatherDelay'
 import { SettingsEmergencyStop } from '../screens/SettingsEmergencyStop'
+import { SettingsHomeAssistant } from '../screens/SettingsHomeAssistant'
 import { SettingsSite } from '../screens/SettingsSite'
 import { SettingsBrightness } from '../screens/SettingsBrightness'
 import { SettingsAppearance } from '../screens/SettingsAppearance'
@@ -124,16 +127,19 @@ export default function App() {
               <Route path="assets" element={<ShowsAssets />} />
               <Route path="presentation" element={<ShowsPresentation />} />
               <Route path="automation" element={<ShowsAutomation />} />
+              <Route path="sequence-testing" element={<ShowsSequenceTesting />} />
               <Route path="night-session" element={<ShowsNightSession />} />
             </Route>
             <Route path="settings" element={<Settings />}>
               <Route index element={<Navigate replace to="/settings/connections" />} />
               <Route path="connections" element={<SettingsConnections />} />
+              <Route path="mqtt-brokers" element={<SettingsMQTTBrokers />} />
               <Route path="delivery" element={<SettingsDelivery />} />
               <Route path="recovery" element={<SettingsRecovery />} />
               <Route path="weather-delay" element={<SettingsWeatherDelay />} />
               <Route path="emergency-stop" element={<SettingsEmergencyStop />} />
               <Route path="site" element={<SettingsSite />} />
+              <Route path="home-assistant" element={<SettingsHomeAssistant />} />
               <Route path="brightness" element={<SettingsBrightness />} />
               <Route path="dashboard" element={<SettingsDashboard />} />
               <Route path="appearance" element={<SettingsAppearance />} />

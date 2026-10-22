@@ -404,6 +404,8 @@ func Run() int {
 	// goroutine, for why this is a two-step wiring rather than a single
 	// constructor call.
 	cueAudioTrigger.SetSources(catalogStore, audioMgr, cfg.AssetDir, timeline, weatherDelay)
+	nightState := NewNightStateHolder(cfg.AssetDir, logger)
+	cueAudioTrigger.SetNightState(nightState)
 	audioRebuilder := newAudioEngineRebuilder(sigCtx, cfg.AssetDir, audioEngine, audioMgr, logger)
 	// audioEngineHeldNode (audiocapabilities.go) is wired to the SAME
 	// rebuilder so a post-bind capability detection can tell "the engine
@@ -496,6 +498,7 @@ func Run() int {
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
 	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioReportTrigger, audioBind, catalogStore, clockBind, fppConnect, weatherDelay, time.Now, logger)
+	cmdHandler.ops["night.state.set"] = nightState.set
 
 	if cueActivate, ok := cmdHandler.operation("cue.activate"); ok {
 		fallbackIngress.setActivate(cueActivate)

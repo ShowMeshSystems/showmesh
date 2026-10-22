@@ -50,7 +50,10 @@ type cueAudioTriggerTable map[string]cueAudioTriggerEntry
 // never carried triggers: an empty table answers every lookup with "not
 // found," the coordinator-only start path this node already ran before
 // ADR-051 existed.
-func buildCueAudioTriggerTable(entries []cuecatalog.Entry) cueAudioTriggerTable {
+//
+// withTestTriggers adds each entry's TestTriggers (ADR-067) only where no
+// playlist trigger already claims the filename.
+func buildCueAudioTriggerTable(entries []cuecatalog.Entry, withTestTriggers bool) cueAudioTriggerTable {
 	table := make(cueAudioTriggerTable)
 	for _, e := range entries {
 		if e.Outputs.Audio == nil || len(e.Triggers) == 0 {
@@ -58,6 +61,20 @@ func buildCueAudioTriggerTable(entries []cuecatalog.Entry) cueAudioTriggerTable 
 		}
 		for _, filename := range e.Triggers {
 			if filename == "" {
+				continue
+			}
+			table[filename] = cueAudioTriggerEntry{CueID: e.CueID, Audio: *e.Outputs.Audio, LTC: e.Outputs.LTC}
+		}
+	}
+	if !withTestTriggers {
+		return table
+	}
+	for _, e := range entries {
+		if e.Outputs.Audio == nil {
+			continue
+		}
+		for _, filename := range e.TestTriggers {
+			if _, taken := table[filename]; filename == "" || taken {
 				continue
 			}
 			table[filename] = cueAudioTriggerEntry{CueID: e.CueID, Audio: *e.Outputs.Audio, LTC: e.Outputs.LTC}
@@ -100,9 +117,11 @@ type multiSyncCueAudioTrigger struct {
 	assetDir     string
 	timeline     *multisync.Timeline
 	weatherDelay *WeatherDelayHolder
+	nightState   *NightStateHolder
 
 	tableMu       sync.Mutex
 	tableRevision string
+	tableTests    bool
 	table         cueAudioTriggerTable
 
 	// stateMu guards generation and preparedLate: this hook's own
@@ -120,6 +139,11 @@ type multiSyncCueAudioTrigger struct {
 	generation   uint64
 	preparedLate map[string]bool
 
+	// stoppedWhilePlaying holds, per filename, the start record that was
+	// current when a STOP arrived with that sequence's audio still playing.
+	// A START that finds the same record still current is a restart.
+	stoppedWhilePlaying map[string]audioStartTriggerRecord
+
 	// openMu guards openWaiters: filename -> a channel closed once that
 	// filename's own OPEN-triggered cold prepare has finished, so START
 	// can wait for it without blocking the packet read loop.
@@ -133,11 +157,12 @@ type multiSyncCueAudioTrigger struct {
 // this package (cueactivationaudio.go's activationRevision).
 func newMultiSyncCueAudioTrigger(logger *slog.Logger, now func() time.Time, audioReportTrigger chan<- struct{}) *multiSyncCueAudioTrigger {
 	return &multiSyncCueAudioTrigger{
-		logger:             logger,
-		now:                now,
-		audioReportTrigger: audioReportTrigger,
-		preparedLate:       make(map[string]bool),
-		openWaiters:        make(map[string]chan struct{}),
+		logger:              logger,
+		now:                 now,
+		audioReportTrigger:  audioReportTrigger,
+		preparedLate:        make(map[string]bool),
+		stoppedWhilePlaying: make(map[string]audioStartTriggerRecord),
+		openWaiters:         make(map[string]chan struct{}),
 	}
 }
 
@@ -172,6 +197,20 @@ func (c *multiSyncCueAudioTrigger) SetSources(catalogStore *heldcatalog.FileStor
 	c.weatherDelay = weatherDelay
 }
 
+// SetNightState wires the night flag that gates TestTriggers. Unset means open.
+func (c *multiSyncCueAudioTrigger) SetNightState(h *NightStateHolder) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nightState = h
+}
+
+func (c *multiSyncCueAudioTrigger) testTriggersOn() bool {
+	c.mu.Lock()
+	h := c.nightState
+	c.mu.Unlock()
+	return !h.Open()
+}
+
 func (c *multiSyncCueAudioTrigger) sources() (*heldcatalog.FileStore, *audio.Manager, string, *multisync.Timeline) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -190,7 +229,7 @@ func (c *multiSyncCueAudioTrigger) weatherDelayActive() bool {
 
 // lookup resolves filename against this node's current held catalog,
 // rebuilding the cached trigger table only when the held catalog's own
-// revision has changed since the last lookup, cheap enough to check on
+// revision or the night flag has changed since the last lookup, cheap enough to check on
 // every OPEN/START/STOP (a handful of packets per sequence, never on the
 // much more frequent SYNC, which this hook never even sees, see
 // HandleSequencePacket).
@@ -199,10 +238,12 @@ func (c *multiSyncCueAudioTrigger) lookup(filename string, catalogStore *heldcat
 	if err != nil || !ok {
 		return cueAudioTriggerEntry{}, false
 	}
+	tests := c.testTriggersOn()
 	c.tableMu.Lock()
-	if c.tableRevision != rec.Revision {
-		c.table = buildCueAudioTriggerTable(rec.Entries)
+	if c.tableRevision != rec.Revision || c.tableTests != tests {
+		c.table = buildCueAudioTriggerTable(rec.Entries, tests)
 		c.tableRevision = rec.Revision
+		c.tableTests = tests
 	}
 	table := c.table
 	c.tableMu.Unlock()
@@ -251,6 +292,27 @@ func (c *multiSyncCueAudioTrigger) consumePreparedLate(filename string) bool {
 	late := c.preparedLate[filename]
 	delete(c.preparedLate, filename)
 	return late
+}
+
+func (c *multiSyncCueAudioTrigger) markStoppedWhilePlaying(filename string, rec audioStartTriggerRecord) {
+	c.stateMu.Lock()
+	c.stoppedWhilePlaying[filename] = rec
+	c.stateMu.Unlock()
+}
+
+// consumeRestart reports whether a START for filename restarts audio this
+// node started before that sequence's last STOP. A start recorded after the
+// STOP, such as a coordinator activation, is left alone.
+func (c *multiSyncCueAudioTrigger) consumeRestart(filename string, registry *audioStartTriggerRegistry) bool {
+	c.stateMu.Lock()
+	stopped, ok := c.stoppedWhilePlaying[filename]
+	delete(c.stoppedWhilePlaying, filename)
+	c.stateMu.Unlock()
+	if !ok {
+		return false
+	}
+	current, ok := registry.get(cueActivationAudioSessionID)
+	return ok && current == stopped
 }
 
 func (c *multiSyncCueAudioTrigger) bumpGeneration() uint64 {
@@ -318,6 +380,9 @@ func (c *multiSyncCueAudioTrigger) HandleSequencePacket(ctx context.Context, pkt
 		c.waitOpen(pkt.Filename)
 		c.handleStart(ctx, mgr, assetDir, registry, entry, pkt.Filename, arrival)
 	case multisync.SyncActionStop:
+		if rec, ok := registry.get(cueActivationAudioSessionID); ok && c.sessionAlreadyPlaying(ctx, mgr) {
+			c.markStoppedWhilePlaying(pkt.Filename, rec)
+		}
 		gen := c.bumpGeneration()
 		c.handleStop(ctx, mgr, timeline, entry, pkt.Filename, gen)
 	}
@@ -457,14 +522,24 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 
 	target := c.targetIdentity(entry)
 
+	restart := c.consumeRestart(filename, registry)
 	cueIdentity, cueReady := mgr.LoadedMediaIdentity(cueActivationAudioSessionID)
 	if cueReady && cueIdentity == target && c.sessionAlreadyPlaying(ctx, mgr) {
-		// Already playing this exact media, from either trigger source: a
-		// coordinator activation that got here first is left alone
-		// (ADR-051 decision 6 / item 7), and a MultiSync START arriving
-		// second must be left alone the same way: restarting would be an
-		// audible glitch for no benefit.
-		return
+		if !restart {
+			// Already playing this exact media, from either trigger source: a
+			// coordinator activation that got here first is left alone
+			// (ADR-051 decision 6 / item 7), and a MultiSync START arriving
+			// second must be left alone the same way.
+			return
+		}
+		// FPP stopped and restarted this sequence, so the song starts over.
+		// Stopping releases the handle, so the cold prepare below runs. The
+		// stop's revision sits just below now so the restart's own steps,
+		// minted from now or later, still outrank it.
+		stopAt := c.now().Add(-time.Nanosecond)
+		c.logger.Info("multisync: sequence restarted, starting its cue audio over", "cue_id", entry.CueID, "sequence_filename", filename)
+		mgr.Stop(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "restart-stop", stopAt), c.revision(stopAt, cueactivation.AudioSessionStepApply))
+		cueIdentity, cueReady = mgr.LoadedMediaIdentity(cueActivationAudioSessionID)
 	}
 
 	preparedLate := c.consumePreparedLate(filename)

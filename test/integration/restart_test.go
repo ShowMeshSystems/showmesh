@@ -125,8 +125,8 @@ func TestCoordinatorRestartRestoresInventoryFromRetainedTopics(t *testing.T) {
 	if view.Evidence.Hello.State == "not_collected" {
 		t.Fatalf("hello evidence state = not_collected, want the retained hello restored")
 	}
-	if len(view.Capabilities) != 1 || view.Capabilities[0].ID != "matrix.render" {
-		t.Errorf("Capabilities = %+v, want [matrix.render] restored from the retained hello", view.Capabilities)
+	if len(view.Capabilities) != 2 || view.Capabilities[0].ID != "matrix.render" || view.Capabilities[1].ID != "cue.testtriggers" {
+		t.Errorf("Capabilities = %+v, want [matrix.render cue.testtriggers] restored from the retained hello", view.Capabilities)
 	}
 	if view.Evidence.LastWill.State == "not_collected" {
 		t.Fatalf("lastWill evidence state = not_collected, want the retained online=true record")

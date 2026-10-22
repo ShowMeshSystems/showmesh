@@ -464,6 +464,28 @@ func TestOpenAPIReleaseSettingsConfigResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
 }
 
+// TestOpenAPIEventsMQTTConfigResponsesMatchRealResponses checks a GET, a PUT
+// and the revision history against the schema.
+func TestOpenAPIEventsMQTTConfigResponsesMatchRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	api, _, _, token := eventsMQTTTestAPI(t, nil)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	_, defaultBody := doRequest(t, api.Handler, "GET", eventsMQTTPath, auth)
+	assertMatchesSchema(t, c, "EventsMQTTConfigResponse", defaultBody)
+
+	body := `{"enabled":true,"broker":"ha","topicPrefix":"barn"}`
+	assertMatchesSchema(t, c, "ConfigEventsMQTTPutPayload", []byte(body))
+	resp, putBody := doRawRequest(t, api.Handler, newJSONRequest(t, http.MethodPut, eventsMQTTPath, body, auth))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT %s: status = %d, want 200; body: %s", body, resp.StatusCode, putBody)
+	}
+	assertMatchesSchema(t, c, "EventsMQTTConfigResponse", putBody)
+
+	_, revBody := doRequest(t, api.Handler, "GET", eventsMQTTPath+"/revisions", auth)
+	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
+}
+
 // TestOpenAPIDiscoveryResponsesMatchRealResponses is finding 15's own
 // regression test: seam B's three routes (POST /discovery/runs, POST
 // /nodes/{nodeId}/declaration, DELETE /nodes/{nodeId}/declaration) had NO

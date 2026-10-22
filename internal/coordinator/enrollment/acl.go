@@ -10,7 +10,7 @@ import (
 // reservedBrokerUsernames are the fixed broker roles no node may use, the
 // list deploy/mosquitto/generate-credentials.sh's is_fixed_role holds.
 var reservedBrokerUsernames = map[string]bool{
-	"coordinator": true, "fpp": true, "healthcheck": true, "observer": true,
+	"coordinator": true, "fpp": true, "healthcheck": true, "observer": true, "integration": true,
 }
 
 // IsReservedNodeID reports whether nodeID names a fixed broker role.
