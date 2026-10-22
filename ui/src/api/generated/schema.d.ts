@@ -6595,9 +6595,9 @@ export interface components {
         ConfigEventsMQTTPayload: {
             /** @description Whether the coordinator publishes events and the night state. */
             enabled: boolean;
-            /** @description The id of the integration broker to publish to. Empty until one is picked. */
+            /** @description The id of the integration broker to publish to, which may be `built-in`. Empty until one is picked. */
             broker: string;
-            /** @description The first part of every topic published. `showmesh` until changed. */
+            /** @description The first part of every topic published. `showmesh` until changed. On `built-in` it must start with `showmesh-actions/`. */
             topicPrefix: string;
         };
         /** @description The body PUT /config/events.mqtt accepts. Each field is optional: one left out keeps its stored value. A field that is present must not be `null`. */

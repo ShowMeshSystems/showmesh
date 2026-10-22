@@ -37,7 +37,7 @@ export function SettingsHomeAssistant() {
 
   const editReason = gate.allowed ? undefined : gate.reason
   const dirty = loaded !== null && JSON.stringify(loaded) !== JSON.stringify(draft)
-  const problem = draft.enabled && draft.broker.trim() === '' ? 'Publishing is on but no broker is named. Enter the broker id the installer set up.' : null
+  const problem = draft.enabled && draft.broker.trim() === '' ? 'Publishing is on but no broker is named. Enter a broker id from the MQTT brokers list in Settings.' : null
 
   const save = () => {
     setSaving(true)
@@ -82,7 +82,7 @@ export function SettingsHomeAssistant() {
               label="Send events to the broker"
             />
             <FieldGrid>
-              <Field label="Broker" help="The id of a broker the installer set up for integrations.">
+              <Field label="Broker" help="The id of a broker from the MQTT brokers list in Settings. The built-in broker needs a topic prefix under showmesh-actions/.">
                 {(props) => <Input {...props} value={draft.broker} disabled={editReason !== undefined} onChange={(e) => setDraft((d) => ({ ...d, broker: e.target.value }))} />}
               </Field>
               <Field label="Topic prefix" help="The first part of every topic. Plain words separated by /.">

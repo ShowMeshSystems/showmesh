@@ -65,11 +65,16 @@ func EventsMQTTProblem(s EventsMQTT, brokers []IntegrationBroker) string {
 		return ""
 	}
 	for _, b := range brokers {
-		if b.ID == s.Broker {
-			return ""
+		if b.ID != s.Broker {
+			continue
 		}
+		// Both topics sit under prefix/, so checking that one path covers them.
+		if IntegrationTopicProblem(b, s.TopicPrefix+"/") != "" {
+			return fmt.Sprintf("The topic prefix %s is outside what the %s broker allows. Start it with %s, such as %sevents, and save again.", s.TopicPrefix, b.ID, b.TopicPrefix, b.TopicPrefix)
+		}
+		return ""
 	}
-	return fmt.Sprintf("The broker %s is not set up on this coordinator. Pick one the installer lists.", s.Broker)
+	return fmt.Sprintf("The broker %s is not set up on this coordinator. Pick one from the MQTT brokers list in Settings.", s.Broker)
 }
 
 func eventsTopicPrefixProblem(prefix string) string {

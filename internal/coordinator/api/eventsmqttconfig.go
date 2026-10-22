@@ -134,7 +134,12 @@ func (h *handlers) handlePutEventsMQTTConfig(w http.ResponseWriter, r *http.Requ
 		writeProblem(w, h.logger, now, invalidParameterProblem(problem))
 		return
 	}
-	if problem = config.EventsMQTTProblem(settings, h.deps.IntegrationBrokers); problem != "" {
+	brokers, err := h.deps.IntegrationBrokers.IntegrationBrokers(ctx)
+	if err != nil {
+		h.writeInternalError(w, now, "list integration brokers for events.mqtt", err)
+		return
+	}
+	if problem = config.EventsMQTTProblem(settings, brokers); problem != "" {
 		writeProblem(w, h.logger, now, invalidParameterProblem(problem))
 		return
 	}

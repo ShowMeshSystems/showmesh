@@ -13,10 +13,11 @@ Date: 2026-10-21
   watching the screen finds out the show did not start.
 - A site that runs Home Assistant wants to turn ShowMesh happenings into phone
   notifications and automations, and to choose for itself which ones matter.
-- The coordinator already connects to the external brokers listed in
-  `SHOWMESH_INTEGRATION_BROKERS` for MQTT show actions (STEP-9-SPEC.md
-  section 2.10). ADR-008 keeps those brokers separate from the fleet broker,
-  and the fleet broker is never used for integrations.
+- The coordinator already connects to integration brokers for MQTT show
+  actions (STEP-9-SPEC.md section 2.10): the brokers an operator adds in
+  Settings, and the built-in broker through its own `integration` login,
+  which may use `showmesh-actions/#` and nothing else (ADR-024, amended
+  2026-10-22).
 - How outbound notifications are routed is still open in RES-013 and
   OBSERVABILITY.md section 11. This record settles one route, MQTT to an
   integration broker, without closing the rest of that question.
@@ -27,8 +28,11 @@ Date: 2026-10-21
    three optional fields: `enabled` (default false), `broker` (the id of one
    integration broker), and `topicPrefix` (default `showmesh`). It is edited on
    a Settings tab in the UI, through the configuration API, and with
-   `showmeshctl`. An unset or disabled setting publishes nothing. The list of
-   integration brokers stays an installer setting.
+   `showmeshctl`. An unset or disabled setting publishes nothing. Any
+   integration broker may be named, including `built-in`. On `built-in` the
+   topic prefix must start with `showmesh-actions/` (for example
+   `showmesh-actions/events`), because its login may use no other topics;
+   saving refuses any other prefix there.
 2. **Every row the coordinator adds to its event history is published**, not
    retained, at QoS 1, on `<topicPrefix>/events/<category>`. The message is
    JSON with the event's `seq`, `recordedAt`, `occurredAt`, `category`,
@@ -75,11 +79,13 @@ Date: 2026-10-21
   are for what the installer sets.
 - **A static payload on an existing MQTT show action, run on refusal.**
   Cannot carry the refusal reason, and needs one action per kind of event.
-- **Publishing on the fleet broker.** ADR-008 keeps integrations off it, and
-  every new topic there needs an access-list grant.
+- **Publishing on the built-in broker outside `showmesh-actions/`.** The
+  `integration` login would need a wider access-list grant, and ADR-024 keeps
+  it to that one topic tree so it can never reach a node or FPP command.
 
 ## Related
 
 - [ADR-008](ADR-008-mqtt-control-plane.md), the fleet broker's conventions.
+- [ADR-024](ADR-024-identity-authorization-and-audit.md), the `integration` login on the built-in broker.
 - [ADR-065](ADR-065-site-actions-and-shutdown-sequences.md), night site actions on integration brokers.
 - [RES-013](../research/RES-013-telemetry-storage-and-alerting.md), outbound notifications.

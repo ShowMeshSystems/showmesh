@@ -18205,10 +18205,10 @@ components:
           description: Whether the coordinator publishes events and the night state.
         broker:
           type: string
-          description: The id of the integration broker to publish to. Empty until one is picked.
+          description: The id of the integration broker to publish to, which may be `built-in`. Empty until one is picked.
         topicPrefix:
           type: string
-          description: The first part of every topic published. `showmesh` until changed.
+          description: The first part of every topic published. `showmesh` until changed. On `built-in` it must start with `showmesh-actions/`.
     ConfigEventsMQTTPutPayload:
       type: object
       description: >-

@@ -83,7 +83,10 @@ func eventsMQTTTestAPI(t *testing.T, change func(*Dependencies)) (api *API, st *
 	adminToken = mustIssueToken(t, svc, mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin).ID)
 	deps = configTestDeps(svc, st)
 	deps.NightSessions = st
-	deps.IntegrationBrokers = []config.IntegrationBroker{{ID: "ha", URL: "tcp://127.0.0.1:1883"}}
+	deps.IntegrationBrokers = StaticIntegrationBrokers{
+		{ID: "ha", URL: "tcp://127.0.0.1:1883"},
+		{ID: config.BuiltInIntegrationBrokerID, URL: "tcp://127.0.0.1:1883", TopicPrefix: config.BuiltInIntegrationTopicPrefix},
+	}
 	if change != nil {
 		change(&deps)
 	}
@@ -124,6 +127,8 @@ func TestEventsMQTTConfigRefusesWhatCannotWork(t *testing.T) {
 	api, _, _, admin := eventsMQTTTestAPI(t, nil)
 	for name, body := range map[string]string{
 		"undeclared broker": `{"enabled":true,"broker":"nowhere"}`,
+		"built-in default":  `{"enabled":true,"broker":"built-in"}`,
+		"built-in root":     `{"enabled":true,"broker":"built-in","topicPrefix":"showmesh-actions"}`,
 		"enabled no broker": `{"enabled":true}`,
 		"wildcard plus":     `{"topicPrefix":"a/+/b"}`,
 		"wildcard hash":     `{"topicPrefix":"a/#"}`,
@@ -138,6 +143,13 @@ func TestEventsMQTTConfigRefusesWhatCannotWork(t *testing.T) {
 		if resp, m := putEventsMQTT(t, api, admin, body); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: status %d body %v, want 400", name, resp.StatusCode, m)
 		}
+	}
+}
+
+func TestEventsMQTTConfigAcceptsTheBuiltInBrokerUnderItsTopics(t *testing.T) {
+	api, _, _, admin := eventsMQTTTestAPI(t, nil)
+	if resp, m := putEventsMQTT(t, api, admin, `{"enabled":true,"broker":"built-in","topicPrefix":"showmesh-actions/events"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d body %v, want 200", resp.StatusCode, m)
 	}
 }
 

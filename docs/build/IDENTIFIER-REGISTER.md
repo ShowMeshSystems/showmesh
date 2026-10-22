@@ -1378,8 +1378,8 @@ Step 2; add rows here before minting one.
 | `showmesh/fpp/<instance-id>/observed/fallback` (retained) | released | Track J seam J1 landed without it. Free to reuse |
 | `showmesh/events/weather_delay` (retained) | shipped | ADR-053 weather delay: the system-wide delay state, on `showmesh/events/show_mode`'s own precedent |
 | `showmesh/events/weather_delay/dark/<group-id>` | shipped | ADR-053 weather delay: the optional per-power-group "confirmed dark" heartbeat an outside power controller listens for. Not retained: a heartbeat that stops must read as stopped |
-| `<topicPrefix>/events/<category>` on an integration broker | reserved | ADR-068: every event-history row, not retained. Never on the fleet broker; `topicPrefix` defaults to `showmesh` |
-| `<topicPrefix>/night/state` (retained) on an integration broker | reserved | ADR-068: the current night state. Never on the fleet broker |
+| `<topicPrefix>/events/<category>` on an integration broker | reserved | ADR-068: every event-history row, not retained. On the built-in broker the prefix must start with `showmesh-actions/`; `topicPrefix` defaults to `showmesh` |
+| `<topicPrefix>/night/state` (retained) on an integration broker | reserved | ADR-068: the current night state. On the built-in broker the prefix must start with `showmesh-actions/` |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
