@@ -2264,3 +2264,23 @@ coordinator's Ed25519 public key (§5.13). Pairing delivers that key
   then it has no key to verify a program against.
 - The route, the request, the refusals, the rate limit, and the audit entry of
   the claim are unchanged. Night readiness does not read the key.
+
+## 6. Run Action command scope
+
+**Status: coordinator BUILT, plugin command unbuilt.**
+
+Coordinator anchor: `ScopeShowActionInvoke`
+
+The plugin's "ShowMesh: Run Action" FPP command calls
+`POST /api/v1/actions/{id}/invocations`. That route is guarded by
+`show:action:invoke`, so the `scheduler` role, which is the installed plugin
+principal, grows by exactly this one scope. Like `fpp:observe` in §1.1, it is
+added to the `scheduler` bundle and not to anything else.
+
+This adds no new reach. The role already holds `show:macro:run`, so it can run
+any macro, and a macro step can invoke any stored action. The new scope lets the
+plugin invoke one action directly instead of through a one-step macro.
+
+The plugin lists what it can run with `GET /api/v1/config/show.macro` and
+`GET /api/v1/config/show.action`. Both are already permitted by
+`show:macro:run`, so no further scope is needed for the lists.

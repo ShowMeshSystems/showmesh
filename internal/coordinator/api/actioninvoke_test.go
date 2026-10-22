@@ -143,6 +143,32 @@ func TestInvokeActionRequiresShowActionInvokeScope(t *testing.T) {
 	}
 }
 
+// TestInvokeActionAllowsSchedulerRole proves the installed plugin's scheduler
+// credential can invoke a stored action.
+func TestInvokeActionAllowsSchedulerRole(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	scheduler := mustCreatePrincipal(t, svc, "sched-1", identity.RoleScheduler)
+	schedulerToken := mustIssueToken(t, svc, scheduler.ID)
+	deps := showConfigTestDeps(svc, st)
+	dispatcher := &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+		"blackout": {Outcome: ResolumeOutcomeConfirmed, Reason: "went dark"},
+	}}
+	deps.ResolumeActions = dispatcher
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, adminToken, "blackout-now", validShowActionResolumeBlackoutBody)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("blackout-now", "key-scheduler", schedulerToken))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("scheduler: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if dispatcher.callCount() != 1 {
+		t.Errorf("resolume dispatch calls = %d, want 1", dispatcher.callCount())
+	}
+}
+
 // TestInvokeActionResolumeConfirmed proves the resolume branch dispatches
 // through [Dependencies.ResolumeActions].Dispatch — the same seam
 // resolumeaction.go's own HTTP handler and macro's step both use — and

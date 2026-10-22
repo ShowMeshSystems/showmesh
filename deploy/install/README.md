@@ -96,8 +96,8 @@ again with `--home-assistant` replaces it.
 ## Operator UI port
 
 The operator UI answers on port 8081 unless the installer is told otherwise.
-An interactive coordinator run asks for the port every time, defaulting to the
-saved one, and `--ui-port PORT` sets it unattended. Port 80 lets a browser open
+An interactive first install asks for the port. A later run keeps the saved
+port without asking, and `--ui-port PORT` sets or changes it. Port 80 lets a browser open
 `http://<coordinator>/` with no port in the address, the way FPP does. The
 choice is saved as `SHOWMESH_UI_PORT` in `/opt/showmesh/coordinator/.env`, so a
 later run keeps it, and a later `--ui-port` changes it and recreates only the
