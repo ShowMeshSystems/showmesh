@@ -6,7 +6,7 @@ import { describeApiError, evaluateScope } from '../domain/session'
 
 const BLANK: ConfigEventsMQTTPayload = { enabled: false, broker: '', topicPrefix: 'showmesh' }
 
-/** Settings > Home Assistant: where the coordinator publishes its events and the night state (ADR-067). */
+/** Settings > Home Assistant: where the coordinator publishes its events and the night state (ADR-068). */
 export function SettingsHomeAssistant() {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')

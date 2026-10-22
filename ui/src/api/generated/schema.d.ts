@@ -2207,7 +2207,7 @@ export interface paths {
         };
         /**
          * Where coordinator events are published
-         * @description Requires `config:write`. Whether the coordinator publishes its events and the night state to an integration broker, which broker, and under which topic prefix (ADR-067). Never `404`s: when nothing has been written, the payload is the default (off, prefix `showmesh`), reported with `revision` `0` and `source` `"default"`.
+         * @description Requires `config:write`. Whether the coordinator publishes its events and the night state to an integration broker, which broker, and under which topic prefix (ADR-068). Never `404`s: when nothing has been written, the payload is the default (off, prefix `showmesh`), reported with `revision` `0` and `source` `"default"`.
          */
         get: operations["getEventsMQTTConfig"];
         /**

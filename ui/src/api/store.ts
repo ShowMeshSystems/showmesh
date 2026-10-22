@@ -4226,7 +4226,7 @@ export class ApiStore {
     }
   }
 
-  /** `GET /api/v1/config/events.mqtt`: where coordinator events are published (ADR-067). */
+  /** `GET /api/v1/config/events.mqtt`: where coordinator events are published (ADR-068). */
   async getEventsMQTTConfig(): Promise<SchemaEventsMQTTConfigResponse> {
     const controller = this.beginSideCall()
     try {

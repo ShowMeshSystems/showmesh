@@ -1,4 +1,4 @@
-# ADR-067: Coordinator events are published to an integration broker
+# ADR-068: Coordinator events are published to an integration broker
 
 Status: Proposed
 Date: 2026-10-21

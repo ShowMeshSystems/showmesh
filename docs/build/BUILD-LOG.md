@@ -131,9 +131,9 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
-## 2026-10-21 (coordinator events published to a Home Assistant broker: ADR-067 build)
+## 2026-10-21 (coordinator events published to a Home Assistant broker: ADR-068 build)
 
-**Goal:** make refused night commands and the rest of the event history reach a site's Home Assistant, per [ADR-067](../decisions/ADR-067-coordinator-events-are-published-to-an-integration-broker.md).
+**Goal:** make refused night commands and the rest of the event history reach a site's Home Assistant, per [ADR-068](../decisions/ADR-068-coordinator-events-are-published-to-an-integration-broker.md).
 
 **Completed:**
 
@@ -142,7 +142,7 @@ The **Current state** block at the top of this file is overwritten each session:
 - Forwarder `internal/coordinator/api/eventsmqttforwarder.go`: follows the event history by sequence number from the latest row at startup, publishes each row on `<prefix>/events/<category>` at QoS 1 and the night state retained on `<prefix>/night/state`, through the integration broker registry only. A failed publish drops the rest of that batch, so a broker that is down costs one five-second wait per poll.
 - `showmeshctl events-mqtt get|set|revisions` and a Settings tab, Home Assistant, built from the existing kit.
 
-**Decisions made:** none beyond ADR-067. The state payload nests readiness as `readiness.outcome` and `readiness.completedAt`.
+**Decisions made:** none beyond ADR-068. The state payload nests readiness as `readiness.outcome` and `readiness.completedAt`.
 
 **Deferred:** nothing has run against a real Home Assistant or the rehearsal broker.
 
