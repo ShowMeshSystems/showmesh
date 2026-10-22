@@ -247,6 +247,9 @@ type SchemaConfigPreviewGatewayPutRequest = components['schemas']['ConfigPreview
 type SchemaConfigDashboardLayoutPutRequest = components['schemas']['ConfigDashboardLayoutPutRequest']
 type SchemaDashboardLayoutConfigResponse = components['schemas']['DashboardLayoutConfigResponse']
 type SchemaPreviewCameraConfigResponse = components['schemas']['PreviewCameraConfigResponse']
+type SchemaIntegrationBrokersListResponse = components['schemas']['IntegrationBrokersListResponse']
+type SchemaIntegrationBrokerResponse = components['schemas']['IntegrationBrokerResponse']
+type SchemaIntegrationBrokerPutRequest = components['schemas']['IntegrationBrokerPutRequest']
 type SchemaConfigPreviewNDIPutRequest = components['schemas']['ConfigPreviewNDIPutRequest']
 type SchemaPreviewNDIConfigResponse = components['schemas']['PreviewNDIConfigResponse']
 type SchemaPreviewGatewayConfigResponse = components['schemas']['PreviewGatewayConfigResponse']
@@ -651,6 +654,36 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.putJson<SchemaPreviewGatewayConfigResponse>('/config/preview.gateway', request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/integration.broker`: the brokers an MQTT action may name, built-in first. Passwords are never returned. */
+  async listIntegrationBrokers(): Promise<SchemaIntegrationBrokersListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaIntegrationBrokersListResponse>('/config/integration.broker', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/integration.broker/{id}`. A field left out keeps the stored value; a null password clears it. */
+  async putIntegrationBroker(id: string, request: SchemaIntegrationBrokerPutRequest): Promise<SchemaIntegrationBrokerResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaIntegrationBrokerResponse>(`/config/integration.broker/${encodeURIComponent(id)}`, request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `DELETE /api/v1/config/integration.broker/{id}`. Refused while an action still names the broker. */
+  async deleteIntegrationBroker(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson(`/config/integration.broker/${encodeURIComponent(id)}`, { confirm: true }, controller.signal)
     } finally {
       this.endSideCall(controller)
     }

@@ -14,6 +14,7 @@ import {
   invokeAction,
   listAssets,
   listConfigObjects,
+  listIntegrationBrokers,
   listMacroRuns,
   listResolumeActions,
   putShowAction,
@@ -24,6 +25,7 @@ import {
   type ActionInvocationResult,
   type Asset,
   type AudioNodeSummary,
+  type IntegrationBroker,
   type ConfigShowAction,
   type ConfigShowActionMQTTExpect,
   type ConfigShowActionTarget,
@@ -1401,15 +1403,66 @@ function FppTarget({ value, onChange, fppInstances }: { value: FppTargetValue; o
   )
 }
 
+type BrokersState = { kind: 'loading' } | { kind: 'loaded'; brokers: IntegrationBroker[] } | { kind: 'failed'; reason: string }
+
+function useIntegrationBrokers(): BrokersState {
+  const [state, setState] = useState<BrokersState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    listIntegrationBrokers()
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', brokers: response.brokers })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+function BrokerField({ value, brokers, onChange }: { value: string; brokers: BrokersState; onChange: (broker: string) => void }) {
+  if (brokers.kind !== 'loaded') {
+    return (
+      <Field label="Broker" help={brokers.kind === 'failed' ? `The broker list could not be read: ${brokers.reason}` : 'Reading the broker list.'}>
+        {(props) => <Input {...props} className="sm-data" value={value} onChange={(e) => onChange(e.target.value)} />}
+      </Field>
+    )
+  }
+  if (brokers.brokers.length === 0) {
+    return <RuledStrip absence="empty" label="No MQTT brokers" fact="No MQTT broker is set up. Add one in Settings, MQTT brokers." />
+  }
+  const missing = value !== '' && !brokers.brokers.some((b) => b.id === value)
+  return (
+    <Field label="Broker" help={missing ? `Broker ${value} no longer exists. Pick another one.` : undefined}>
+      {(props) => (
+        <Select {...props} className="sm-data" value={value} onChange={(e) => onChange(e.target.value)}>
+          {value === '' && <option value="">Pick a broker</option>}
+          {missing && <option value={value}>{value}</option>}
+          {brokers.brokers.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.builtIn ? `${b.id}, the built-in broker` : b.id}
+            </option>
+          ))}
+        </Select>
+      )}
+    </Field>
+  )
+}
+
 function MqttTarget({ value, onChange }: { value: MqttTargetValue; onChange: (value: MqttTargetValue) => void }) {
+  const brokers = useIntegrationBrokers()
+  const selected = brokers.kind === 'loaded' ? brokers.brokers.find((b) => b.id === value.broker) : undefined
+  const prefix = selected?.topicPrefix ?? ''
+  const topicHelp = prefix === '' ? undefined : `Must start with ${prefix} on this broker.`
   return (
     <div className="sm-inspector__group">
       <p className="sm-eyebrow sm-flat">mqtt target</p>
-      <Field label="Broker" help="Must name a broker this deployment declares.">
-        {(props) => <Input {...props} className="sm-data" value={value.broker} onChange={(e) => onChange({ ...value, broker: e.target.value })} />}
-      </Field>
-      <Field label="Topic">
-        {(props) => <Input {...props} className="sm-data" value={value.topic} onChange={(e) => onChange({ ...value, topic: e.target.value })} />}
+      <BrokerField value={value.broker} brokers={brokers} onChange={(broker) => onChange({ ...value, broker })} />
+      <Field label="Topic" help={topicHelp}>
+        {(props) => <Input {...props} className="sm-data" value={value.topic} placeholder={prefix === '' ? undefined : prefix} onChange={(e) => onChange({ ...value, topic: e.target.value })} />}
       </Field>
       <Field label="Payload" help="Passed through undecoded.">
         {(props) => <Textarea {...props} className="sm-data" rows={2} value={value.payload} onChange={(e) => onChange({ ...value, payload: e.target.value })} />}
@@ -1439,8 +1492,8 @@ function MqttTarget({ value, onChange }: { value: MqttTargetValue; onChange: (va
       </Field>
       {value.expectKind !== 'none' && (
         <>
-          <Field label="Confirmation topic">
-            {(props) => <Input {...props} className="sm-data" value={value.expectTopic} onChange={(e) => onChange({ ...value, expectTopic: e.target.value })} />}
+          <Field label="Confirmation topic" help={topicHelp}>
+            {(props) => <Input {...props} className="sm-data" value={value.expectTopic} placeholder={prefix === '' ? undefined : prefix} onChange={(e) => onChange({ ...value, expectTopic: e.target.value })} />}
           </Field>
           <Field label="Deadline" help="Seconds. 1 to 120.">
             {(props) => <Input {...props} type="number" min={1} max={120} value={value.expectDeadline} onChange={(e) => onChange({ ...value, expectDeadline: e.target.value })} />}
