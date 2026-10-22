@@ -139,6 +139,8 @@ type nightCommandOutcome struct {
 	// transactional path and the fallback path, so a decide function
 	// describes it as data here rather than issuing it directly.
 	readiness *store.NightReadinessRecord
+	// readinessFailed names the checks that did not pass, for the readiness event.
+	readinessFailed []string
 
 	// auditParams, when non-nil, is folded into this command's own audit
 	// entry (ADR-024's Params field). Track F seam F6's only user: an
@@ -303,7 +305,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	idempotencyKey, interlockOverrides, skipEnterShowLead, stopFPPPlayback, problem := decodeNightCommandBody(r, cmd)
 	if problem != nil {
-		writeProblem(w, h.logger, now, *problem)
+		h.refuseNightCommand(w, ctx, now, cmd, *problem)
 		return
 	}
 
@@ -319,10 +321,10 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 			return
 		} else if wdRec.Active && wdRec.Kind == weatherdelay.KindCancelNight {
 			h.appendWeatherDelayChangedEvent(ctx, now, "Start night was refused because tonight's show was cancelled for weather. Clear the cancellation to start.")
-			writeProblem(w, h.logger, now, weatherDelayActiveProblem("Tonight's show was cancelled for weather. Clear the cancellation to start a show."))
+			h.refuseNightCommand(w, ctx, now, cmd, weatherDelayActiveProblem("Tonight's show was cancelled for weather. Clear the cancellation to start a show."))
 			return
 		} else if wdRec.Active {
-			writeProblem(w, h.logger, now, weatherDelayActiveProblem("A weather delay is active. Resume the show to start it."))
+			h.refuseNightCommand(w, ctx, now, cmd, weatherDelayActiveProblem("A weather delay is active. Resume the show to start it."))
 			return
 		}
 	}
@@ -402,9 +404,10 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if problem != nil {
-		writeProblem(w, h.logger, now, *problem)
+		h.refuseNightCommand(w, ctx, now, cmd, *problem)
 		return
 	}
+	h.appendNightCommandApplied(ctx, now, cmd, out.result.ID, out.outcome)
 	// nightRunGated (unlike nightRunExempt) has no *attributionDegraded
 	// pointer parameter to set directly, so its own degraded outcome
 	// arrives here on out.result.AttributionDegraded instead - fold it
@@ -599,6 +602,9 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 			if err := tx.CreateNightReadiness(ctx, *out.readiness); err != nil {
 				return identity.AuditEntry{}, err
 			}
+			if _, err := tx.AppendEvent(ctx, nightReadinessEventRecord(now, out.readiness.SessionID, out.readiness.Outcome, out.readinessFailed)); err != nil {
+				h.logWarn("night events: failed to append readiness event", "error", err)
+			}
 		}
 		if out.closeCycleOutcome != nil {
 			// No gated decide function sets this today: every command that
@@ -647,6 +653,7 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 				if err := h.deps.NightSessions.CreateNightReadiness(ctx, *out.readiness); err != nil {
 					return nightCommandOutcome{}, nil, err
 				}
+				h.appendNightEvent(ctx, nightReadinessEventRecord(now, out.readiness.SessionID, out.readiness.Outcome, out.readinessFailed))
 			}
 			switch out.persist {
 			case "create":
@@ -1661,7 +1668,7 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 		}
 		next := *curTx
 		next.ReadinessID = rec.ID
-		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update", readiness: &rec}
+		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update", readiness: &rec, readinessFailed: nightFailingCheckNames(checks)}
 		if len(overrideAuditParams) > 0 {
 			out.auditParams = map[string]any{"interlockOverrides": overrideAuditParams}
 		}

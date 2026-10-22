@@ -106,6 +106,8 @@ import type {
   ConfigEmergencyStopPayload,
   SitePowerConfigResponse,
   ConfigSitePowerPayload,
+  EventsMQTTConfigResponse,
+  ConfigEventsMQTTPutPayload,
   SequenceTestConfigResponse,
   ConfigSequenceTestPayload,
   FPPSequenceListResponse,
@@ -645,6 +647,14 @@ export function getSitePowerConfig(): Promise<SitePowerConfigResponse> {
 
 export function putSitePowerConfig(payload: ConfigSitePowerPayload): Promise<SitePowerConfigResponse> {
   return store.putSitePowerConfig(payload)
+}
+
+export function getEventsMQTTConfig(): Promise<EventsMQTTConfigResponse> {
+  return store.getEventsMQTTConfig()
+}
+
+export function putEventsMQTTConfig(payload: ConfigEventsMQTTPutPayload): Promise<EventsMQTTConfigResponse> {
+  return store.putEventsMQTTConfig(payload)
 }
 
 export function getSequenceTestConfig(showId: string): Promise<SequenceTestConfigResponse> {

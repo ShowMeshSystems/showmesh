@@ -124,6 +124,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `release.settings` | `default` singleton | shipped | the newest-release check: enabled and interval |
 | `preview.gateway` | `default` singleton | shipped | ADR-060: the preview gateway address and its token (credential) |
 | `preview.camera` | operator-chosen | shipped | ADR-060: one RTSP camera; its URL is a credential |
+| `events.mqtt` | `default` singleton | shipped | ADR-068: publish coordinator events to one integration broker; `enabled`, `broker`, `topicPrefix`, all optional |
 | `preview.ndi` | operator-chosen | shipped | ADR-060: one NDI source added by hand, by NDI name and optional address |
 | `dashboard.layout` | `default` singleton | shipped | ADR-060: the dashboard preview order and hidden tiles |
 
@@ -1377,6 +1378,8 @@ Step 2; add rows here before minting one.
 | `showmesh/fpp/<instance-id>/observed/fallback` (retained) | released | Track J seam J1 landed without it. Free to reuse |
 | `showmesh/events/weather_delay` (retained) | shipped | ADR-053 weather delay: the system-wide delay state, on `showmesh/events/show_mode`'s own precedent |
 | `showmesh/events/weather_delay/dark/<group-id>` | shipped | ADR-053 weather delay: the optional per-power-group "confirmed dark" heartbeat an outside power controller listens for. Not retained: a heartbeat that stops must read as stopped |
+| `<topicPrefix>/events/<category>` on an integration broker | reserved | ADR-068: every event-history row, not retained. On the built-in broker the prefix must start with `showmesh-actions/`; `topicPrefix` defaults to `showmesh` |
+| `<topicPrefix>/night/state` (retained) on an integration broker | reserved | ADR-068: the current night state. On the built-in broker the prefix must start with `showmesh-actions/` |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -1662,6 +1665,18 @@ the stream non-resumable, so a client that misses frames re-fetches the
 authoritative session state rather than reconstructing it from a sequence of
 transition events; a per-transition kind would invite exactly the
 reconstruction the non-resumable rule forbids.
+
+## Event history categories
+
+`store.EventRecord.Category`. Since ADR-068 these are MQTT topic segments a
+subscriber filters on, so a new or renamed category is recorded here. Older
+categories predate this section and are not yet listed.
+
+| Category | Status | Owner |
+|---|---|---|
+| `night.command.refused` | shipped | ADR-068: a night command was refused; the reason the operator saw |
+| `night.command.applied` | shipped | ADR-068: a night command was applied |
+| `night.readiness.completed` | shipped | ADR-068: Run readiness finished; outcome and failing checks |
 
 ## Research record numbers
 

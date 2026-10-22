@@ -1443,6 +1443,13 @@ func Run() int {
 		nightLoop.Run(ctx)
 	})
 
+	// eventsForwarder publishes events to the integration broker named by
+	// events.mqtt and does nothing while that setting is off.
+	eventsForwarder := api.NewEventsMQTTForwarder(apiDeps, apiOpts)
+	spawnBackground(func() {
+		eventsForwarder.Run(ctx)
+	})
+
 	// weatherDelayEnforcer always runs: no configuration value may exempt a
 	// player from it while a delay is active.
 	weatherDelayEnforcer := api.NewWeatherDelayEnforcer(apiDeps, apiOpts)

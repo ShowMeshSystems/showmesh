@@ -348,6 +348,8 @@ type SchemaSequenceTestConfigResponse = components['schemas']['SequenceTestConfi
 type SchemaConfigSequenceTestPayload = components['schemas']['ConfigSequenceTestPayload']
 type SchemaFPPSequenceListResponse = components['schemas']['FPPSequenceListResponse']
 type SchemaSitePowerRunResponse = components['schemas']['SitePowerRunResponse']
+type SchemaEventsMQTTConfigResponse = components['schemas']['EventsMQTTConfigResponse']
+type SchemaConfigEventsMQTTPutPayload = components['schemas']['ConfigEventsMQTTPutPayload']
 type SchemaConfigWeatherDelayPayload = components['schemas']['ConfigWeatherDelayPayload']
 
 /**
@@ -4252,6 +4254,26 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.putJson<SchemaSitePowerConfigResponse>('/config/show.sitepower', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/events.mqtt`: where coordinator events are published (ADR-068). */
+  async getEventsMQTTConfig(): Promise<SchemaEventsMQTTConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaEventsMQTTConfigResponse>('/config/events.mqtt', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/events.mqtt`: a partial update. */
+  async putEventsMQTTConfig(payload: SchemaConfigEventsMQTTPutPayload): Promise<SchemaEventsMQTTConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaEventsMQTTConfigResponse>('/config/events.mqtt', payload, controller.signal)
     } finally {
       this.endSideCall(controller)
     }
