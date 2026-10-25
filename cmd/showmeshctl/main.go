@@ -375,6 +375,8 @@ Commands:
   resolume action set-layer-bypass <id> <bool>   set a layer's bypass and confirm by evidence (write)
   resolume action set-layer-master <id> <value>  set a layer's master level (write)
   resolume action fade-layer <layer> <percent>  fade a layer's master over OSC (write)
+  resolume action launch-group-column --group <n> --deck <deck> <column>  launch a column in one layer group over OSC (write)
+  resolume action clear-group <n>             clear every layer in a layer group over OSC (write)
   resolume instance list               show the configured resolume.instances configuration
                                        (requires config:write)
   resolume instance set --id --url     write a new resolume.instances revision naming exactly

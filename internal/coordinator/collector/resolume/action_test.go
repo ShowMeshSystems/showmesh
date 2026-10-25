@@ -16,9 +16,9 @@ import (
 
 // --- The registry -----------------------------------------------------
 
-func TestActionRegistryHasExactlyEightEntries(t *testing.T) {
-	if got, want := len(actionRegistry), 8; got != want {
-		t.Fatalf("len(actionRegistry) = %d, want %d: TRACK-D-D3-SPEC.md §2's seven actions plus ADR-064's fadeLayer", got, want)
+func TestActionRegistryHasExactlyTenEntries(t *testing.T) {
+	if got, want := len(actionRegistry), 10; got != want {
+		t.Fatalf("len(actionRegistry) = %d, want %d: TRACK-D-D3-SPEC.md §2's seven actions, fadeLayer, and the two OSC layer group actions", got, want)
 	}
 }
 
@@ -27,6 +27,7 @@ func TestActionRegistryNamesMatchTheSpecTable(t *testing.T) {
 		ActionLaunchClip: true, ActionClearLayer: true, ActionBlackout: true,
 		ActionLaunchColumn: true, ActionSelectDeck: true,
 		ActionSetLayerBypass: true, ActionSetLayerMaster: true, ActionFadeLayer: true,
+		ActionLaunchGroupColumn: true, ActionClearGroup: true,
 	}
 	seen := map[ActionName]bool{}
 	for _, e := range actionRegistry {
@@ -72,10 +73,11 @@ func TestEveryActionDeclaresASafetyClass(t *testing.T) {
 // stated here because they are "the reason this table is written out" —
 // exempting them to protect the silencing direction would exempt the
 // lighting direction with it (Step 8's own shipped defect).
-func TestActionSafetyClassMembershipIsExactlyBlackoutAndClearLayer(t *testing.T) {
+func TestActionSafetyClassMembershipIsExactlyTheDarkeningActions(t *testing.T) {
 	wantExempt := map[ActionName]bool{
 		ActionBlackout:   true,
 		ActionClearLayer: true,
+		ActionClearGroup: true,
 	}
 	for _, e := range actionRegistry {
 		got := e.SafetyClass == ActionSafetyClassExempt

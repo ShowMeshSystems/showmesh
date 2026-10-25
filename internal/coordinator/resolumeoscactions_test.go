@@ -118,12 +118,13 @@ func (r staticCompositionReader) CurrentCompositionRevision(context.Context) (in
 	return 1, r.json, true, nil
 }
 
-// oscTestCompositionStore holds two decks, two layers, a column and a clip on the
-// second deck, and one persistent clip.
+// oscTestCompositionStore holds two decks, two layer groups, two layers, a
+// column and a clip on the second deck, and one persistent clip.
 func oscTestCompositionStore(t *testing.T) *resolume.CompositionStore {
 	t.Helper()
 	comp := resolumecomp.Composition{
 		Decks:           []resolumecomp.Deck{{ID: "1001", Name: "Main"}, {ID: "1002", Name: "Second"}},
+		LayerGroups:     []resolumecomp.LayerGroup{{ID: "6001", Index: 0}, {ID: "6002", Index: 1}},
 		Layers:          []resolumecomp.Layer{{ID: "2001", Index: 0, Name: "Layer A"}, {ID: "2002", Index: 1, Name: "Layer B"}},
 		Columns:         []resolumecomp.Column{{ID: "4001", DeckID: "1002", Index: 2}},
 		Clips:           []resolumecomp.Clip{{ID: "3001", DeckID: "1002", LayerIndex: 1, ColumnIndex: 2, Name: "Snow"}},
@@ -178,6 +179,11 @@ func TestResolumeOSCActionsSendArenaAddresses(t *testing.T) {
 			{addr: "/composition/decks/2/select", tag: 'i', i: 1},
 			{addr: "/composition/columns/3/connect", tag: 'i', i: 1},
 		}},
+		{"launchGroupColumn", map[string]any{"group": 2.0, "column": "Column 3", "deck": "Second"}, []oscMsg{
+			{addr: "/composition/decks/2/select", tag: 'i', i: 1},
+			{addr: "/composition/groups/2/columns/3/connect", tag: 'i', i: 1},
+		}},
+		{"clearGroup", map[string]any{"group": 1.0}, []oscMsg{{addr: "/composition/groups/1/disconnectlayers", tag: 'i', i: 1}}},
 		{"clearLayer", map[string]any{"layer": "Layer B"}, []oscMsg{{addr: "/composition/layers/2/clear", tag: 'i', i: 1}}},
 		{"setLayerBypass", map[string]any{"layer": "Layer A", "bypassed": true}, []oscMsg{{addr: "/composition/layers/1/bypassed", tag: 'i', i: 1}}},
 		{"setLayerBypass", map[string]any{"layer": "Layer A", "bypassed": false}, []oscMsg{{addr: "/composition/layers/1/bypassed", tag: 'i', i: 0}}},
@@ -263,6 +269,10 @@ func TestResolumeOSCRefusesWhatIsNotInTheComposition(t *testing.T) {
 		{"selectDeck", map[string]any{"deck": "Nope"}},
 		{"launchColumn", map[string]any{"column": "Column 9", "deck": "Second"}},
 		{"fadeLayer", map[string]any{"layer": "Layer Z", "targetPercent": 0.0}},
+		{"launchGroupColumn", map[string]any{"group": 3.0, "column": "Column 3", "deck": "Second"}},
+		{"launchGroupColumn", map[string]any{"group": 1.0, "column": "Column 9", "deck": "Second"}},
+		{"clearGroup", map[string]any{"group": 0.0}},
+		{"clearGroup", map[string]any{"group": 1.5}},
 	} {
 		res := dispatchOSC(t, d, tt.action, tt.params)
 		if res.Outcome != api.ResolumeOutcomeRefused || res.Dispatched || res.Reason == "" {
@@ -333,6 +343,8 @@ func TestResolumeOSCControlNeverContactsArenasWebServer(t *testing.T) {
 		{"setLayerBypass", map[string]any{"layer": "Layer A", "bypassed": true}},
 		{"setLayerMaster", map[string]any{"layer": "Layer A", "master": 0.5}},
 		{"fadeLayer", map[string]any{"layer": "Layer B", "targetPercent": 0.0}},
+		{"launchGroupColumn", map[string]any{"group": 1.0, "column": "Column 3", "deck": "Second"}},
+		{"clearGroup", map[string]any{"group": 2.0}},
 		{"blackout", map[string]any{}},
 	} {
 		res, err := mgr.Dispatch(ctx, a.action, a.params, time.Now())

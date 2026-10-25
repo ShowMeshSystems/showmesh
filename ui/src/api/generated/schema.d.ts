@@ -6120,7 +6120,7 @@ export interface components {
         /** @description One entry of the fixed seven-action vocabulary GET /resolume/actions returns. auditExempt mirrors ADR-024 decision 11's safety class: true only for `blackout` and `clearLayer`. coordinatorRequired is `true` for every entry today - the Resolume adapter is coordinator- hosted and Resolume holds no local fallback - carried on the wire so a macro author never has to know that out of band. */
         ResolumeAction: {
             /** @enum {string} */
-            name: "launchClip" | "clearLayer" | "blackout" | "launchColumn" | "selectDeck" | "setLayerBypass" | "setLayerMaster" | "fadeLayer";
+            name: "launchClip" | "clearLayer" | "blackout" | "launchColumn" | "selectDeck" | "setLayerBypass" | "setLayerMaster" | "fadeLayer" | "launchGroupColumn" | "clearGroup";
             params: components["schemas"]["ResolumeActionParam"][];
             auditExempt: boolean;
             coordinatorRequired: boolean;
@@ -6132,7 +6132,7 @@ export interface components {
             actions: components["schemas"]["ResolumeAction"][];
         };
         /** @description The body of POST /resolume/actions - a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against - reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. ADR-037: every reference below is a NAME, resolved against the stored composition - a raw Resolume object id is never accepted anywhere in this union, and a request that still sends one is refused as an unrecognized parameter. */
-        ResolumeActionRequest: components["schemas"]["ResolumeLaunchClipActionRequest"] | components["schemas"]["ResolumeClearLayerActionRequest"] | components["schemas"]["ResolumeLaunchColumnActionRequest"] | components["schemas"]["ResolumeSelectDeckActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"] | components["schemas"]["ResolumeFadeLayerActionRequest"];
+        ResolumeActionRequest: components["schemas"]["ResolumeLaunchClipActionRequest"] | components["schemas"]["ResolumeClearLayerActionRequest"] | components["schemas"]["ResolumeLaunchColumnActionRequest"] | components["schemas"]["ResolumeSelectDeckActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"] | components["schemas"]["ResolumeFadeLayerActionRequest"] | components["schemas"]["ResolumeLaunchGroupColumnActionRequest"] | components["schemas"]["ResolumeClearGroupActionRequest"];
         /** @description `action: "launchClip"`: launches (connects) a clip named by `params.clip`, scoped to exactly one of `params.deck` (a deck clip) or `params.persistent: true` (a persistent clip, which lives outside any deck and carries no `deck`) - `params` below encodes that exclusivity structurally, so a client generated from this contract never constructs the other shapes. A coordinator that receives one anyway (neither or both) does not reject it with `400`: it answers `200` with `result.outcome: "refused"`, exactly like any other unresolvable reference - see ResolumeActionResult.outcome. `params.layer` disambiguates a clip name that occurs more than once; when it does not match any candidate the candidate set narrows to zero, never falling back to the unfiltered set. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` too (never a stale-reference error and never a silent deck change). */
         ResolumeLaunchClipActionRequest: {
             /**
@@ -6231,6 +6231,36 @@ export interface components {
                 layer: string;
                 /** @description The requested master value. Commonly [0, 1] but validated against the layer's own declared range, not assumed. */
                 master: number;
+            };
+        };
+        /** @description `action: "launchGroupColumn"`: selects the column's deck, then launches that column inside one layer group only, over Arena's OSC input (ADR-066). Refused when the instance is not set to OSC control. OSC sends no reply, so a sent launch is `unconfirmable`. */
+        ResolumeLaunchGroupColumnActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "launchGroupColumn";
+            idempotencyKey: string;
+            params: {
+                /** @description Arena's group number, counting from 1 in the composition's order. Groups carry no name in the composition file. */
+                group: number;
+                /** @description The column's own generated label - columns never carry an authored name. */
+                column: string;
+                /** @description The deck this column lives on. */
+                deck: string;
+            };
+        };
+        /** @description `action: "clearGroup"`: disconnects every layer in one layer group, over Arena's OSC input (ADR-066). Refused when the instance is not set to OSC control. OSC sends no reply, so a sent clear is `unconfirmable`. */
+        ResolumeClearGroupActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "clearGroup";
+            idempotencyKey: string;
+            params: {
+                /** @description Arena's group number, counting from 1 in the composition's order. */
+                group: number;
             };
         };
         /** @description `action: "fadeLayer"`: ramps a layer's master fader to targetPercent over durationMs, sent to Arena's OSC input (ADR-064). The call returns once the fade starts. OSC sends no reply, so a sent fade is always `unconfirmable`, never `confirmed`. A newer fade on the same layer replaces a running one. */
@@ -7430,7 +7460,7 @@ export interface components {
             broker?: string;
             publish?: components["schemas"]["ConfigShowActionMQTTPublish"];
             expect?: components["schemas"]["ConfigShowActionMQTTExpect"];
-            /** @description resolume-only: one of the Resolume action names (launchClip, clearLayer, blackout, launchColumn, selectDeck, setLayerBypass, setLayerMaster, fadeLayer). */
+            /** @description resolume-only: one of the Resolume action names (launchClip, clearLayer, blackout, launchColumn, selectDeck, setLayerBypass, setLayerMaster, fadeLayer, launchGroupColumn, clearGroup). */
             action?: string;
             /** @description resolume-only: ADR-037's named-reference vocabulary for this action. Every key is a reference or a value from a closed, per-action list, enforced by this coordinator's write-time validation rather than by this schema. */
             ref?: {

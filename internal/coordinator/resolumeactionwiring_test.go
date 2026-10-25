@@ -131,24 +131,24 @@ func TestMapActionSafetyClassFailsLoudlyOnUndeclared(t *testing.T) {
 func TestAdapterActionsMatchesADR024Decision11ExactlyThroughTheRealRegistry(t *testing.T) {
 	adapter := newResolumeActionDispatcherAdapter(nil, nil)
 	descriptors := adapter.Actions()
-	if len(descriptors) != 8 {
-		t.Fatalf("len(Actions()) = %d, want 8", len(descriptors))
+	if len(descriptors) != 10 {
+		t.Fatalf("len(Actions()) = %d, want 10", len(descriptors))
 	}
 
-	wantExempt := map[string]bool{"blackout": true, "clearLayer": true}
+	wantExempt := map[string]bool{"blackout": true, "clearLayer": true, "clearGroup": true}
 	seen := map[string]bool{}
 	for _, d := range descriptors {
 		seen[d.Name] = true
 		want := wantExempt[d.Name]
 		if d.AuditExempt != want {
-			t.Errorf("action %q: AuditExempt = %v, want %v (ADR-024 decision 11: only blackout and clearLayer are exempt)",
+			t.Errorf("action %q: AuditExempt = %v, want %v (ADR-024 decision 11: only the darkening actions are exempt)",
 				d.Name, d.AuditExempt, want)
 		}
 		if !d.CoordinatorRequired {
 			t.Errorf("action %q: CoordinatorRequired = false, want true (every action in this vocabulary is coordinator-required)", d.Name)
 		}
 	}
-	for _, name := range []string{"launchClip", "clearLayer", "blackout", "launchColumn", "selectDeck", "setLayerBypass", "setLayerMaster"} {
+	for _, name := range []string{"launchClip", "clearLayer", "blackout", "launchColumn", "selectDeck", "setLayerBypass", "setLayerMaster", "fadeLayer", "launchGroupColumn", "clearGroup"} {
 		if !seen[name] {
 			t.Errorf("action %q is missing from Actions()", name)
 		}

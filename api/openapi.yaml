@@ -17113,7 +17113,8 @@ components:
           type: string
           enum:
             [launchClip, clearLayer, blackout, launchColumn, selectDeck,
-             setLayerBypass, setLayerMaster, fadeLayer]
+             setLayerBypass, setLayerMaster, fadeLayer, launchGroupColumn,
+             clearGroup]
         params:
           type: array
           items:
@@ -17162,6 +17163,8 @@ components:
           setLayerBypass: "#/components/schemas/ResolumeSetLayerBypassActionRequest"
           setLayerMaster: "#/components/schemas/ResolumeSetLayerMasterActionRequest"
           fadeLayer: "#/components/schemas/ResolumeFadeLayerActionRequest"
+          launchGroupColumn: "#/components/schemas/ResolumeLaunchGroupColumnActionRequest"
+          clearGroup: "#/components/schemas/ResolumeClearGroupActionRequest"
       oneOf:
         - $ref: "#/components/schemas/ResolumeLaunchClipActionRequest"
         - $ref: "#/components/schemas/ResolumeClearLayerActionRequest"
@@ -17171,6 +17174,8 @@ components:
         - $ref: "#/components/schemas/ResolumeSetLayerBypassActionRequest"
         - $ref: "#/components/schemas/ResolumeSetLayerMasterActionRequest"
         - $ref: "#/components/schemas/ResolumeFadeLayerActionRequest"
+        - $ref: "#/components/schemas/ResolumeLaunchGroupColumnActionRequest"
+        - $ref: "#/components/schemas/ResolumeClearGroupActionRequest"
     ResolumeLaunchClipActionRequest:
       type: object
       description: >-
@@ -17357,6 +17362,60 @@ components:
               description: >-
                 The requested master value. Commonly [0, 1] but validated
                 against the layer's own declared range, not assumed.
+    ResolumeLaunchGroupColumnActionRequest:
+      type: object
+      description: >-
+        `action: "launchGroupColumn"`: selects the column's deck, then
+        launches that column inside one layer group only, over Arena's OSC
+        input (ADR-066). Refused when the instance is not set to OSC
+        control. OSC sends no reply, so a sent launch is `unconfirmable`.
+      required: [action, idempotencyKey, params]
+      properties:
+        action:
+          type: string
+          const: launchGroupColumn
+        idempotencyKey:
+          type: string
+        params:
+          type: object
+          required: [group, column, deck]
+          additionalProperties: false
+          properties:
+            group:
+              type: integer
+              minimum: 1
+              description: Arena's group number, counting from 1 in the composition's order. Groups carry no name in the composition file.
+            column:
+              type: string
+              minLength: 1
+              description: The column's own generated label - columns never carry an authored name.
+            deck:
+              type: string
+              minLength: 1
+              description: The deck this column lives on.
+    ResolumeClearGroupActionRequest:
+      type: object
+      description: >-
+        `action: "clearGroup"`: disconnects every layer in one layer group,
+        over Arena's OSC input (ADR-066). Refused when the instance is not
+        set to OSC control. OSC sends no reply, so a sent clear is
+        `unconfirmable`.
+      required: [action, idempotencyKey, params]
+      properties:
+        action:
+          type: string
+          const: clearGroup
+        idempotencyKey:
+          type: string
+        params:
+          type: object
+          required: [group]
+          additionalProperties: false
+          properties:
+            group:
+              type: integer
+              minimum: 1
+              description: Arena's group number, counting from 1 in the composition's order.
     ResolumeFadeLayerActionRequest:
       type: object
       description: >-
@@ -20495,7 +20554,8 @@ components:
           description: >-
             resolume-only: one of the Resolume action names
             (launchClip, clearLayer, blackout, launchColumn, selectDeck,
-            setLayerBypass, setLayerMaster, fadeLayer).
+            setLayerBypass, setLayerMaster, fadeLayer, launchGroupColumn,
+            clearGroup).
           minLength: 1
         ref:
           type: object

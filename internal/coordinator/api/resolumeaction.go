@@ -257,14 +257,16 @@ func (noResolumeActionDispatcher) Dispatch(context.Context, string, map[string]a
 // resolumeActionAuditAction fallback below rather than failing to build a
 // name at all.
 var resolumeActionAuditNames = map[string]string{
-	"launchClip":     "resolume.launch_clip",
-	"clearLayer":     "resolume.clear_layer",
-	"blackout":       "resolume.blackout",
-	"launchColumn":   "resolume.launch_column",
-	"selectDeck":     "resolume.select_deck",
-	"setLayerBypass": "resolume.set_layer_bypass",
-	"setLayerMaster": "resolume.set_layer_master",
-	"fadeLayer":      "resolume.fade_layer",
+	"launchClip":        "resolume.launch_clip",
+	"clearLayer":        "resolume.clear_layer",
+	"blackout":          "resolume.blackout",
+	"launchColumn":      "resolume.launch_column",
+	"selectDeck":        "resolume.select_deck",
+	"setLayerBypass":    "resolume.set_layer_bypass",
+	"setLayerMaster":    "resolume.set_layer_master",
+	"fadeLayer":         "resolume.fade_layer",
+	"launchGroupColumn": "resolume.launch_group_column",
+	"clearGroup":        "resolume.clear_group",
 }
 
 // resolumeActionAuditAction returns action's internal audit-action name.
