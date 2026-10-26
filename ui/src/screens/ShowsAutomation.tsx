@@ -1452,6 +1452,14 @@ function BrokerField({ value, brokers, onChange }: { value: string; brokers: Bro
   )
 }
 
+const MQTT_CONFIRMATION_HELP: Record<ConfigShowActionMQTTExpect['kind'], string> = {
+  none: 'The message is sent without waiting for a reply, so the result cannot be confirmed.',
+  boolean: 'Waits for a reply of true or false on the confirmation topic. True confirms, false fails, and any other reply fails.',
+  number: 'Waits for a number on the confirmation topic. Any number confirms unless a match value is set.',
+  text: 'Waits for any text reply on the confirmation topic. Any reply confirms, and the result shows what it said.',
+  match: 'Waits for a reply on the confirmation topic that equals the match value exactly. Anything else fails.',
+}
+
 function MqttTarget({ value, onChange }: { value: MqttTargetValue; onChange: (value: MqttTargetValue) => void }) {
   const brokers = useIntegrationBrokers()
   const selected = brokers.kind === 'loaded' ? brokers.brokers.find((b) => b.id === value.broker) : undefined
@@ -1479,7 +1487,7 @@ function MqttTarget({ value, onChange }: { value: MqttTargetValue; onChange: (va
         </Field>
         <Choice type="checkbox" label="Retain" checked={value.retain} onChange={(e) => onChange({ ...value, retain: e.target.checked })} />
       </div>
-      <Field label="Confirmation">
+      <Field label="Confirmation" help={MQTT_CONFIRMATION_HELP[value.expectKind]}>
         {(props) => (
           <Select {...props} value={value.expectKind} onChange={(e) => onChange({ ...value, expectKind: e.target.value as ConfigShowActionMQTTExpect['kind'] })}>
             <option value="none">none</option>
@@ -1495,7 +1503,7 @@ function MqttTarget({ value, onChange }: { value: MqttTargetValue; onChange: (va
           <Field label="Confirmation topic" help={topicHelp}>
             {(props) => <Input {...props} className="sm-data" value={value.expectTopic} placeholder={prefix === '' ? undefined : prefix} onChange={(e) => onChange({ ...value, expectTopic: e.target.value })} />}
           </Field>
-          <Field label="Deadline" help="Seconds. 1 to 120.">
+          <Field label="Deadline" help="Seconds, 1 to 120. Only a new reply that arrives before the deadline counts. A retained message does not count.">
             {(props) => <Input {...props} type="number" min={1} max={120} value={value.expectDeadline} onChange={(e) => onChange({ ...value, expectDeadline: e.target.value })} />}
           </Field>
         </>
@@ -1505,8 +1513,8 @@ function MqttTarget({ value, onChange }: { value: MqttTargetValue; onChange: (va
           label="Match value"
           help={
             value.expectKind === 'match'
-              ? 'Required. An empty box matches an empty reply.'
-              : 'Optional. Empty accepts any reply.'
+              ? 'Required. The reply must equal this text exactly, including case and spaces. An empty box matches an empty reply.'
+              : 'Optional. The reply must equal this number. Leave it empty to accept any number.'
           }
         >
           {(props) => <Input {...props} className="sm-data" value={value.expectValue} onChange={(e) => onChange({ ...value, expectValue: e.target.value })} />}
