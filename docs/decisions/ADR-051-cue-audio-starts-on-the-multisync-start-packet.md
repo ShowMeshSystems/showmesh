@@ -83,6 +83,13 @@ ahead on the media clock, and still reports how late it started. A cold start
 is therefore silent for one prepare and then in step, never behind for the
 whole song. This is a one-time seek at start, which ADR-046 decision 1 permits.
 
+Amended 2026-10-25: the start position is where the sequence has reached at
+the start instant, so it includes the lead. FPP starts its own output when it
+sends START, so a position read at arrival and presented one lead later put
+audio and LTC a constant lead (100 ms by default) behind the lights and the
+render nodes for the whole song. A node whose clock is not locked starts at
+once and seeks back to the song's position at start.
+
 ### 4. The coordinator's chosen instant is the fallback
 
 ADR-049 decisions 3 and 6 now define the fallback start only. If the

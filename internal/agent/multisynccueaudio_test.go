@@ -148,7 +148,8 @@ func resetTriggerRegistry(t *testing.T) *audioStartTriggerRegistry {
 // decision 1's armed path: a Cue already prepared ahead of time under the
 // prepare-ahead staging session starts on the sequence's own START
 // packet, at arrival plus the configured lead, at the Cue's own
-// startOffsetMillis, presented on the SAME engine call
+// startOffsetMillis plus that lead (where FPP's sequence has reached by
+// then), presented on the SAME engine call
 // ([Manager.PromoteAtPosition] reusing the staged handle, never a second
 // decode).
 func TestMultiSyncCueAudioArmedStartsAtArrivalPlusLead(t *testing.T) {
@@ -229,8 +230,8 @@ func TestMultiSyncCueAudioArmedStartsAtArrivalPlusLead(t *testing.T) {
 	if got.State != pkgaudio.StatePlaying {
 		t.Fatalf("session state = %s, want playing", got.State)
 	}
-	if got.PositionKnown && got.Position != 2500*time.Millisecond {
-		t.Fatalf("session position = %v, want 2.5s (the Cue's startOffsetMillis)", got.Position)
+	if got.PositionKnown && got.Position != 2600*time.Millisecond {
+		t.Fatalf("session position = %v, want 2.6s (the Cue's 2.5s startOffsetMillis plus the 100ms lead)", got.Position)
 	}
 
 	rec, ok := cueActivationTriggerRegistry.get(cueActivationAudioSessionID)
@@ -808,7 +809,7 @@ func TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness(t *testing.T) 
 	if err != nil {
 		t.Fatalf("observe: %v", err)
 	}
-	// The other nodes started 1.5s in at T0; this one joins 1s+ later, 150ms ahead.
+	// The song was 1.5s in at arrival; this one joins 1.1s+ later, 150ms ahead.
 	if obs.Position < 2650*time.Millisecond || obs.Position > 3000*time.Millisecond {
 		t.Fatalf("started at %v, want where the song had reached (about 2.65s), not the cue's 1.5s offset", obs.Position)
 	}
@@ -820,7 +821,7 @@ func TestMultiSyncCueAudioRefusedInPastStartFallsBackWithLateness(t *testing.T) 
 	if !rec.PreparedLate {
 		t.Fatal("recorded preparedLate = false, want true: this start missed its computed instant")
 	}
-	if want := (obs.Position - 1500*time.Millisecond).Milliseconds(); rec.LatenessMs != want {
+	if want := (obs.Position - 1600*time.Millisecond).Milliseconds(); rec.LatenessMs != want {
 		t.Fatalf("recorded lateness = %dms, want %dms (how far past T0 its first sample played)", rec.LatenessMs, want)
 	}
 	if rec.Trigger != pkgaudio.StartTriggerMultiSync {
@@ -980,7 +981,8 @@ func TestMultiSyncCueAudioStartCutsPlayingBackgroundBed(t *testing.T) {
 
 // TestMultiSyncCueAudioStartUsesEachCuesLTCOffset proves a MultiSync
 // START applies the Cue's own LTC start offset, and that the next Cue's
-// offset replaces it rather than inheriting the earlier one.
+// offset replaces it rather than inheriting the earlier one. The 50ms lead
+// moves each start one 25 fps frame into the song.
 func TestMultiSyncCueAudioStartUsesEachCuesLTCOffset(t *testing.T) {
 	dir := t.TempDir()
 	clk := &fakeClock{t: time.Date(2026, 9, 17, 20, 0, 0, 0, time.UTC)}
@@ -1029,8 +1031,8 @@ func TestMultiSyncCueAudioStartUsesEachCuesLTCOffset(t *testing.T) {
 		filename string
 		want     pkgaudio.LTCTimecode
 	}{
-		{"neverender.fseq", "04:00:00:00"},
-		{"time-warp.fseq", "01:00:00:00"},
+		{"neverender.fseq", "04:00:00:01"},
+		{"time-warp.fseq", "01:00:00:01"},
 	} {
 		start(tc.filename)
 		spec, requested := fake.LastLTCRequest()
