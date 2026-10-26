@@ -149,6 +149,8 @@ type multiSyncCueAudioTrigger struct {
 	// can wait for it without blocking the packet read loop.
 	openMu      sync.Mutex
 	openWaiters map[string]chan struct{}
+
+	syncTrace syncTracer
 }
 
 // newMultiSyncCueAudioTrigger constructs a trigger consumer with no
@@ -378,11 +380,14 @@ func (c *multiSyncCueAudioTrigger) HandleSequencePacket(ctx context.Context, pkt
 	case multisync.SyncActionStart:
 		c.bumpGeneration()
 		c.waitOpen(pkt.Filename)
-		c.handleStart(ctx, mgr, assetDir, registry, entry, pkt.Filename, arrival)
+		c.handleStart(ctx, mgr, assetDir, registry, entry, pkt.Filename, arrival, packetPosition(timeline, pkt))
+	case multisync.SyncActionSync:
+		c.traceSync(ctx, mgr, pkt.Filename, arrival, packetPosition(timeline, pkt))
 	case multisync.SyncActionStop:
 		if rec, ok := registry.get(cueActivationAudioSessionID); ok && c.sessionAlreadyPlaying(ctx, mgr) {
 			c.markStoppedWhilePlaying(pkt.Filename, rec)
 		}
+		c.endSyncTrace(pkt.Filename, "stop")
 		gen := c.bumpGeneration()
 		c.handleStop(ctx, mgr, timeline, entry, pkt.Filename, gen)
 	}
@@ -507,14 +512,15 @@ func (c *multiSyncCueAudioTrigger) applyAndPrepare(ctx context.Context, mgr *aud
 }
 
 // handleStart is ADR-051 decision 1: T0 is arrival plus the configured
-// lead, position is the Cue's own startOffsetMillis (FPP sends START at
-// frame 0, and SYNC position is never chased, ADR-017), and the actual
+// lead, and position is where the song has reached at T0: the Cue's
+// startOffsetMillis, plus the START packet's own position, plus the time
+// from arrival to T0. SYNC position is never chased (ADR-017). The actual
 // engine call is [Manager.StartAtPosition] (or, when the prepare-ahead
 // staging session holds this exact media, [Manager.PromoteAtPosition],
 // which reuses its already-loaded handle instead of paying for a second
 // decode) so the first sample is presented at T0 on the SAME engine call
 // as position, never a Start-then-Seek pair.
-func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.Manager, assetDir string, registry *audioStartTriggerRegistry, entry cueAudioTriggerEntry, filename string, arrival agentclock.MediaTime) {
+func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.Manager, assetDir string, registry *audioStartTriggerRegistry, entry cueAudioTriggerEntry, filename string, arrival agentclock.MediaTime, sequenceAt time.Duration) {
 	// A resting or preshow bed must never keep playing once any show
 	// sequence starts: cut it immediately, node-local, rather than wait
 	// for the coordinator's own later pause command to arrive.
@@ -584,7 +590,14 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 			}
 		}
 	}
-	position := time.Duration(entry.Audio.StartOffsetMillis) * time.Millisecond
+	startOffset := time.Duration(entry.Audio.StartOffsetMillis) * time.Millisecond
+	// The song is at songAt when the packet arrives, so it is lead further on at T0.
+	songAt := startOffset + sequenceAt
+	anchorNs := arrivalNs
+	if !arrival.Valid {
+		anchorNs = t0
+	}
+	position := caughtUpPosition(songAt, anchorNs, t0)
 
 	now := c.now()
 	invocation := c.invocation(entry.CueID, "start", now)
@@ -598,7 +611,7 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 	}
 	if audioOutcomeFailed(startOutcome) {
 		if startOutcome.Outcome == pkgaudio.OutcomeRefused && strings.HasPrefix(startOutcome.Reason, pkgaudio.ReasonScheduledStartInPast) {
-			c.startLateOnArrival(ctx, mgr, registry, entry, filename, position, t0, arrivalNs, int64(leadMs), target, startOutcome.Reason)
+			c.startLateOnArrival(ctx, mgr, registry, entry, filename, startOffset, sequenceAt, anchorNs, t0, arrivalNs, int64(leadMs), target, startOutcome.Reason)
 			return
 		}
 		c.logger.Warn("multisync: cue audio did not start on its sequence's START packet",
@@ -616,7 +629,20 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 	if strings.HasPrefix(startOutcome.Reason, pkgaudio.ReasonScheduledStartIgnored) {
 		c.logger.Info("multisync: cue audio started on arrival instead of at the computed lead instant",
 			"cue_id", entry.CueID, "sequence_filename", filename, "reason", startOutcome.Reason)
+		// It started now, not at T0, so move it back to where the song has reached.
+		if failedStep, outcome := seekCaughtUp(ctx, mgr, anchorNs, songAt, lateStartSteps{seek: func(at time.Duration) pkgaudio.OutcomeResult {
+			return mgr.Seek(ctx, cueActivationAudioSessionID, c.invocation(entry.CueID, "seek-unscheduled", c.now()), c.revision(c.now(), unalignedFallbackStepSeek), at)
+		}}); failedStep != "" {
+			c.logger.Warn("multisync: cue audio did not move to where the song had reached after an unscheduled start",
+				"cue_id", entry.CueID, "sequence_filename", filename, "outcome", outcome.Outcome, "reason", outcome.Reason)
+		}
+	} else {
+		c.beginSyncTrace(filename, entry.CueID, startOffset, t0, position)
 	}
+	c.logger.Info("multisync: cue audio scheduled on its sequence's START packet",
+		"cue_id", entry.CueID, "sequence_filename", filename,
+		"sequence_position_ms", sequenceAt.Milliseconds(), "start_offset_ms", startOffset.Milliseconds(),
+		"lead_ms", leadMs, "audio_start_position_ms", position.Milliseconds(), "prepared_late", preparedLate)
 
 	registry.set(cueActivationAudioSessionID, audioStartTriggerRecord{
 		Trigger:          pkgaudio.StartTriggerMultiSync,
@@ -633,17 +659,25 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 // startLateOnArrival mirrors cueactivationaudio.go's startUnalignedOnArrival:
 // a T0 already past joins at the position the on-time nodes have reached,
 // never a refusal. A song still staged is promoted rather than loaded again.
-func (c *multiSyncCueAudioTrigger) startLateOnArrival(ctx context.Context, mgr *audio.Manager, registry *audioStartTriggerRegistry, entry cueAudioTriggerEntry, filename string, position time.Duration, t0, arrivalNs, leadMs int64, target, missedReason string) {
+func (c *multiSyncCueAudioTrigger) startLateOnArrival(ctx context.Context, mgr *audio.Manager, registry *audioStartTriggerRegistry, entry cueAudioTriggerEntry, filename string, startOffset, sequenceAt time.Duration, anchorNs, t0, arrivalNs, leadMs int64, target, missedReason string) {
 	now := c.now()
 	var latenessMs int64
-	failedStep, outcome := startCaughtUp(ctx, mgr, t0, position, lateStartSteps{
+	var scheduledAtNs int64
+	var scheduledAt time.Duration
+	failedStep, outcome := startCaughtUp(ctx, mgr, anchorNs, startOffset+sequenceAt, lateStartSteps{
 		scheduled: func(atNs int64, at time.Duration) pkgaudio.OutcomeResult {
 			latenessMs = (atNs - t0) / int64(time.Millisecond)
 			invocation, revision := c.invocation(entry.CueID, "start-rescheduled", now), c.revision(now, unalignedFallbackStepReschedule)
+			var out pkgaudio.OutcomeResult
 			if staged, ok := mgr.LoadedMediaIdentity(pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)); ok && staged == target {
-				return mgr.PromoteAtPosition(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), cueActivationAudioSessionID, invocation, revision, atNs, at)
+				out = mgr.PromoteAtPosition(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), cueActivationAudioSessionID, invocation, revision, atNs, at)
+			} else {
+				out = mgr.StartAtPosition(ctx, cueActivationAudioSessionID, invocation, revision, atNs, at)
 			}
-			return mgr.StartAtPosition(ctx, cueActivationAudioSessionID, invocation, revision, atNs, at)
+			if !audioOutcomeFailed(out) && !strings.HasPrefix(out.Reason, pkgaudio.ReasonScheduledStartIgnored) {
+				scheduledAtNs, scheduledAt = atNs, at
+			}
+			return out
 		},
 		start: func() pkgaudio.OutcomeResult {
 			if mediaNow := mgr.MediaNow(ctx); mediaNow.Valid {
@@ -668,6 +702,9 @@ func (c *multiSyncCueAudioTrigger) startLateOnArrival(ctx context.Context, mgr *
 
 	c.logger.Info("multisync: cue audio missed its start and joined where the song had reached",
 		"cue_id", entry.CueID, "sequence_filename", filename, "lateness_ms", latenessMs, "reason", missedReason)
+	if scheduledAtNs != 0 {
+		c.beginSyncTrace(filename, entry.CueID, startOffset, scheduledAtNs, scheduledAt)
+	}
 
 	registry.set(cueActivationAudioSessionID, audioStartTriggerRecord{
 		Trigger: pkgaudio.StartTriggerMultiSync, CueID: entry.CueID, MediaIdentity: target,

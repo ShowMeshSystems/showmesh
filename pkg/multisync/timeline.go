@@ -828,6 +828,14 @@ func (t *Timeline) estimatePositionLocked(now time.Time) time.Duration {
 	return t.anchorPosition + elapsed
 }
 
+// PacketPosition is the sequence position pkt reports, read the same way
+// Observe reads it.
+func (t *Timeline) PacketPosition(pkt SyncPacket) time.Duration {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.positionFromPacketLocked(pkt)
+}
+
 // positionFromPacketLocked derives a position from a sync packet. RES-002:
 // prefer SecondsElapsed when greater than zero, mirroring FPP's own
 // remote; otherwise fall back to FrameNumber converted via the live step
