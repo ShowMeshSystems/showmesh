@@ -239,6 +239,10 @@ func cmdResolumeAction(args []string, stdout, stderr io.Writer, clock func() tim
 		return cmdResolumeSetLayerMaster(rest, stdout, stderr, clock)
 	case "fade-layer":
 		return cmdResolumeFadeLayer(rest, stdout, stderr, clock)
+	case "launch-group-column":
+		return cmdResolumeLaunchGroupColumn(rest, stdout, stderr, clock)
+	case "clear-group":
+		return cmdResolumeClearGroup(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl resolume action: unknown subcommand %q\n\n", sub)
 		printResolumeActionUsage(stderr)
@@ -274,6 +278,11 @@ Subcommands:
                                                  continuous value (write)
   fade-layer <layer name> <percent>             fade a layer's master over
                                                  --duration-ms, over OSC (write)
+  launch-group-column --group <n> --deck <deck> <column name>
+                                                 launch a column in one layer
+                                                 group, over OSC (write)
+  clear-group <group number>                    clear every layer in a layer
+                                                 group, over OSC (write)
 
 --layer disambiguates a clip name that occurs more than once; --deck and
 --persistent are mutually exclusive and exactly one is required for
@@ -603,4 +612,71 @@ func cmdResolumeFadeLayer(args []string, stdout, stderr io.Writer, clock func() 
 		params["fromPercent"] = *fromPercent
 	}
 	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "fadeLayer", params)
+}
+
+// cmdResolumeLaunchGroupColumn implements launch-group-column: a column name
+// and its --deck, launched only inside layer group --group (Arena's 1-based number).
+func cmdResolumeLaunchGroupColumn(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	const cmdLabel = "resolume action launch-group-column"
+	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
+	group := fs.Int("group", 0, "the layer group's number in Arena, counting from 1 (required)")
+	var deck string
+	fs.StringVar(&deck, "deck", "", "the deck this column lives on (required)")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s --group <n> --deck <deck> <column name> [flags]\n\n"+
+			"Launch a column inside one layer group, sent over OSC.\n"+
+			"Resolume does not answer OSC, so the result is never confirmed.\nRequires resolume:action.\n", cmdLabel)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	if rest[0] == "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "column name must not be empty"))
+	}
+	if *group < 1 {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "--group is required and counts from 1"))
+	}
+	if deck == "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "--deck is required"))
+	}
+	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "launchGroupColumn",
+		map[string]any{"group": *group, "column": rest[0], "deck": deck})
+}
+
+// cmdResolumeClearGroup implements clear-group: clears every layer in one
+// layer group, named by Arena's 1-based group number.
+func cmdResolumeClearGroup(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	const cmdLabel = "resolume action clear-group"
+	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s <group number> [flags]\n\n"+
+			"Clear every layer in one layer group, sent over OSC.\n"+
+			"Resolume does not answer OSC, so the result is never confirmed.\nRequires resolume:action.\n", cmdLabel)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	group, err := strconv.Atoi(rest[0])
+	if err != nil || group < 1 {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "group number must be a whole number from 1, not %q", rest[0]))
+	}
+	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "clearGroup", map[string]any{"group": group})
 }

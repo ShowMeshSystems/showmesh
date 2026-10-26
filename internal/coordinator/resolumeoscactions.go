@@ -51,6 +51,9 @@ func (d *resolumeOSCActionDispatcher) Dispatch(_ context.Context, action string,
 	if name == resolume.ActionFadeLayer {
 		return d.fadeLayer(params, tc), nil
 	}
+	if name == resolume.ActionLaunchGroupColumn || name == resolume.ActionClearGroup {
+		return d.groupAction(name, params, tc), nil
+	}
 	if name == resolume.ActionBlackout {
 		layers := tc.Layers()
 		if len(layers) == 0 {
@@ -134,6 +137,34 @@ func (d *resolumeOSCActionDispatcher) launchClip(tc *resolume.TrackedComposition
 	return d.send(id.String(),
 		oscfade.IntMessage(oscfade.DeckSelectAddress(deck), 1),
 		oscfade.IntMessage(oscfade.ClipConnectAddress(clip.LayerIndex, clip.ColumnIndex), 1))
+}
+
+// groupAction sends a layer group's column launch or clear. Groups have no
+// name in the composition file, so params.group is Arena's 1-based group number.
+func (d *resolumeOSCActionDispatcher) groupAction(name resolume.ActionName, params map[string]any, tc *resolume.TrackedComposition) api.ResolumeActionResult {
+	number, _ := params["group"].(float64)
+	groups := tc.LayerGroups()
+	if number != float64(int(number)) || int(number) < 1 || int(number) > len(groups) {
+		return oscRefused(fmt.Sprintf("Layer group %g is not in the uploaded composition, which has %d, so nothing was sent. Enter a group number from Arena.", number, len(groups)))
+	}
+	group := int(number) - 1
+	if name == resolume.ActionClearGroup {
+		return d.send(groups[group].ID.String(), oscfade.IntMessage(oscfade.GroupClearAddress(group), 1))
+	}
+	columnName, _ := params["column"].(string)
+	deckName, _ := params["deck"].(string)
+	columnID, rerr := resolume.ResolveColumn(tc, deckName, columnName)
+	if rerr != nil {
+		return oscRefused(rerr.Error())
+	}
+	column, ok := tc.ColumnByID(columnID)
+	deck, deckOK := deckIndex(tc, column.DeckID)
+	if !ok || !deckOK {
+		return oscRefused("This column is not in the uploaded composition, so nothing was sent. Upload the composition again.")
+	}
+	return d.send(columnID.String(),
+		oscfade.IntMessage(oscfade.DeckSelectAddress(deck), 1),
+		oscfade.IntMessage(oscfade.GroupColumnConnectAddress(group, column.Index), 1))
 }
 
 // fadeLayer ramps from the last level ShowMesh sent this layer, else from

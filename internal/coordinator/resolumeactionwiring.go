@@ -105,6 +105,14 @@ var resolumeActionParamVocabulary = map[resolume.ActionName][]api.ResolumeAction
 		{Name: "fromPercent", Kind: api.ResolumeActionParamNumber, Required: false},
 		{Name: "durationMs", Kind: api.ResolumeActionParamNumber, Required: false},
 	},
+	resolume.ActionLaunchGroupColumn: {
+		{Name: "group", Kind: api.ResolumeActionParamNumber, Required: true},
+		{Name: "column", Kind: api.ResolumeActionParamString, Required: true},
+		{Name: "deck", Kind: api.ResolumeActionParamString, Required: true},
+	},
+	resolume.ActionClearGroup: {
+		{Name: "group", Kind: api.ResolumeActionParamNumber, Required: true},
+	},
 }
 
 // resolumeActionDispatcherAdapter joins a real *resolume.ActionDispatcher
@@ -247,6 +255,10 @@ func (a *resolumeActionDispatcherAdapter) Dispatch(ctx context.Context, action s
 
 	if name == resolume.ActionFadeLayer {
 		return a.dispatchFadeLayer(ctx, params, tc), nil
+	}
+	if name == resolume.ActionLaunchGroupColumn || name == resolume.ActionClearGroup {
+		return api.ResolumeActionResult{Outcome: api.ResolumeOutcomeRefused,
+			Reason: "Layer group actions are sent over OSC only, so nothing was sent. Set this Resolume instance to OSC control."}, nil
 	}
 
 	actionParams, refusalReason, err := buildResolumeActionParams(name, params, tc)
@@ -421,6 +433,10 @@ func resolumeActionNameFromWire(action string) (resolume.ActionName, bool) {
 		return resolume.ActionSetLayerMaster, true
 	case string(resolume.ActionFadeLayer):
 		return resolume.ActionFadeLayer, true
+	case string(resolume.ActionLaunchGroupColumn):
+		return resolume.ActionLaunchGroupColumn, true
+	case string(resolume.ActionClearGroup):
+		return resolume.ActionClearGroup, true
 	default:
 		return "", false
 	}

@@ -30,6 +30,9 @@ const (
 	// ActionFadeLayer is registered here for its safety class only. It is
 	// sent over OSC by internal/coordinator/oscfade, never by this package.
 	ActionFadeLayer ActionName = "fadeLayer"
+	// ActionLaunchGroupColumn and ActionClearGroup are OSC-only (ADR-066).
+	ActionLaunchGroupColumn ActionName = "launchGroupColumn"
+	ActionClearGroup        ActionName = "clearGroup"
 )
 
 // ActionSafetyClass records whether an action is ADR-024 decision 11's named
@@ -46,11 +49,11 @@ const (
 	ActionSafetyClassUndeclared ActionSafetyClass = iota
 
 	// ActionSafetyClassExempt: ADR-024 decision 11's blackout/stop/power-off
-	// class. [ActionBlackout] and [ActionClearLayer] only.
+	// class. [ActionBlackout], [ActionClearLayer] and [ActionClearGroup] only.
 	ActionSafetyClassExempt
 
 	// ActionSafetyClassNotExempt: fails closed on a pre-dispatch audit-write
-	// failure. Every action other than blackout and clearLayer.
+	// failure. Every action other than blackout, clearLayer and clearGroup.
 	ActionSafetyClassNotExempt
 )
 
@@ -84,6 +87,8 @@ var actionRegistry = []ActionDescriptor{
 	{Name: ActionSetLayerBypass, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionSetLayerMaster, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionFadeLayer, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
+	{Name: ActionLaunchGroupColumn, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
+	{Name: ActionClearGroup, SafetyClass: ActionSafetyClassExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 }
 
 // actionSafetyClass returns name's declared class, or
@@ -338,6 +343,8 @@ func (d *ActionDispatcher) Dispatch(ctx context.Context, name ActionName, params
 		outcome = d.dispatchSetLayerMaster(ctx, w, params)
 	case ActionFadeLayer:
 		return refusedOutcome(name, "A layer fade is sent over OSC, not through Resolume's web API, so it was not sent here."), nil
+	case ActionLaunchGroupColumn, ActionClearGroup:
+		return refusedOutcome(name, "Layer group actions are sent over OSC only, so nothing was sent. Set this Resolume instance to OSC control."), nil
 	default:
 		return ActionOutcome{}, fmt.Errorf("resolume: dispatch: unrecognized action %q", name)
 	}

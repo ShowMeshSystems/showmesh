@@ -44,6 +44,14 @@ func LayerBypassedAddress(layerIndex int) string {
 	return fmt.Sprintf("/composition/layers/%d/bypassed", layerIndex+1)
 }
 
+func GroupColumnConnectAddress(groupIndex, columnIndex int) string {
+	return fmt.Sprintf("/composition/groups/%d/columns/%d/connect", groupIndex+1, columnIndex+1)
+}
+
+func GroupClearAddress(groupIndex int) string {
+	return fmt.Sprintf("/composition/groups/%d/disconnectlayers", groupIndex+1)
+}
+
 // DisconnectAllAddress stops every clip in the composition.
 const DisconnectAllAddress = "/composition/disconnectall"
 

@@ -22,8 +22,9 @@ var (
 	}
 
 	weatherDelayHeldResolumeActions = map[string]bool{
-		config.ShowActionResolumeLaunchClip:   true,
-		config.ShowActionResolumeLaunchColumn: true,
+		config.ShowActionResolumeLaunchClip:        true,
+		config.ShowActionResolumeLaunchColumn:      true,
+		config.ShowActionResolumeLaunchGroupColumn: true,
 	}
 )
 

@@ -1724,3 +1724,20 @@ func TestFadeLayerStartRefusesWhenTheCompositionIsNotConfirmed(t *testing.T) {
 		t.Errorf("requests = %v, want zero", arena.requests)
 	}
 }
+
+func TestGroupActionsAreRefusedOverREST(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	d := newTestActionDispatcher(t, arena, &now, identifiedSnapshot(now))
+	for _, name := range []ActionName{ActionLaunchGroupColumn, ActionClearGroup} {
+		out, err := d.Dispatch(context.Background(), name, ActionParams{})
+		if err != nil || out.State != ActionRefused || out.Reason == "" {
+			t.Errorf("%s: outcome %+v, err %v, want refused with a reason", name, out, err)
+		}
+	}
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	if len(arena.requests) != 0 {
+		t.Errorf("requests = %v, want zero", arena.requests)
+	}
+}

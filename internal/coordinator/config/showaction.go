@@ -454,14 +454,16 @@ func ShowActionAudioActions() []string {
 // duplicated here by value rather than by import: this package must not
 // import that package or internal/coordinator/api.
 const (
-	ShowActionResolumeLaunchClip     = "launchClip"
-	ShowActionResolumeClearLayer     = "clearLayer"
-	ShowActionResolumeBlackout       = "blackout"
-	ShowActionResolumeLaunchColumn   = "launchColumn"
-	ShowActionResolumeSelectDeck     = "selectDeck"
-	ShowActionResolumeSetLayerBypass = "setLayerBypass"
-	ShowActionResolumeSetLayerMaster = "setLayerMaster"
-	ShowActionResolumeFadeLayer      = "fadeLayer"
+	ShowActionResolumeLaunchClip        = "launchClip"
+	ShowActionResolumeClearLayer        = "clearLayer"
+	ShowActionResolumeBlackout          = "blackout"
+	ShowActionResolumeLaunchColumn      = "launchColumn"
+	ShowActionResolumeSelectDeck        = "selectDeck"
+	ShowActionResolumeSetLayerBypass    = "setLayerBypass"
+	ShowActionResolumeSetLayerMaster    = "setLayerMaster"
+	ShowActionResolumeFadeLayer         = "fadeLayer"
+	ShowActionResolumeLaunchGroupColumn = "launchGroupColumn"
+	ShowActionResolumeClearGroup        = "clearGroup"
 )
 
 // showActionResolumeActionNames is every accepted resolume action, sorted,
@@ -469,24 +471,28 @@ const (
 // identical role for the fpp branch).
 var showActionResolumeActionNames = []string{
 	ShowActionResolumeBlackout,
+	ShowActionResolumeClearGroup,
 	ShowActionResolumeClearLayer,
 	ShowActionResolumeFadeLayer,
 	ShowActionResolumeLaunchClip,
 	ShowActionResolumeLaunchColumn,
+	ShowActionResolumeLaunchGroupColumn,
 	ShowActionResolumeSelectDeck,
 	ShowActionResolumeSetLayerBypass,
 	ShowActionResolumeSetLayerMaster,
 }
 
 var showActionResolumeActions = map[string]bool{
-	ShowActionResolumeLaunchClip:     true,
-	ShowActionResolumeClearLayer:     true,
-	ShowActionResolumeBlackout:       true,
-	ShowActionResolumeLaunchColumn:   true,
-	ShowActionResolumeSelectDeck:     true,
-	ShowActionResolumeSetLayerBypass: true,
-	ShowActionResolumeSetLayerMaster: true,
-	ShowActionResolumeFadeLayer:      true,
+	ShowActionResolumeLaunchClip:        true,
+	ShowActionResolumeClearLayer:        true,
+	ShowActionResolumeBlackout:          true,
+	ShowActionResolumeLaunchColumn:      true,
+	ShowActionResolumeSelectDeck:        true,
+	ShowActionResolumeSetLayerBypass:    true,
+	ShowActionResolumeSetLayerMaster:    true,
+	ShowActionResolumeFadeLayer:         true,
+	ShowActionResolumeLaunchGroupColumn: true,
+	ShowActionResolumeClearGroup:        true,
 }
 
 // resolumeActionDeclaredSafetyClass mirrors
@@ -496,14 +502,16 @@ var showActionResolumeActions = map[string]bool{
 // TestResolumeActionSafetyClassMatchesResolumeRegistry reconciles this
 // table against that package's own registry so the two cannot diverge.
 var resolumeActionDeclaredSafetyClass = map[string]string{
-	ShowActionResolumeBlackout:       ShowSafetyClassBlackout,
-	ShowActionResolumeClearLayer:     ShowSafetyClassBlackout,
-	ShowActionResolumeLaunchClip:     ShowSafetyClassNone,
-	ShowActionResolumeLaunchColumn:   ShowSafetyClassNone,
-	ShowActionResolumeSelectDeck:     ShowSafetyClassNone,
-	ShowActionResolumeSetLayerBypass: ShowSafetyClassNone,
-	ShowActionResolumeSetLayerMaster: ShowSafetyClassNone,
-	ShowActionResolumeFadeLayer:      ShowSafetyClassNone,
+	ShowActionResolumeBlackout:          ShowSafetyClassBlackout,
+	ShowActionResolumeClearLayer:        ShowSafetyClassBlackout,
+	ShowActionResolumeLaunchClip:        ShowSafetyClassNone,
+	ShowActionResolumeLaunchColumn:      ShowSafetyClassNone,
+	ShowActionResolumeSelectDeck:        ShowSafetyClassNone,
+	ShowActionResolumeSetLayerBypass:    ShowSafetyClassNone,
+	ShowActionResolumeSetLayerMaster:    ShowSafetyClassNone,
+	ShowActionResolumeFadeLayer:         ShowSafetyClassNone,
+	ShowActionResolumeLaunchGroupColumn: ShowSafetyClassNone,
+	ShowActionResolumeClearGroup:        ShowSafetyClassBlackout,
 }
 
 // ResolumeActionDeclaredSafetyClass exposes resolumeActionDeclaredSafetyClass
@@ -583,6 +591,14 @@ var resolumeActionRefVocabulary = map[string][]resolumeRefParam{
 		{Name: "layer", Kind: resolumeRefString, Required: true},
 		{Name: "targetPercent", Kind: resolumeRefNumber, Required: true},
 		{Name: "durationMs", Kind: resolumeRefNumber, Required: false},
+	},
+	ShowActionResolumeLaunchGroupColumn: {
+		{Name: "group", Kind: resolumeRefNumber, Required: true},
+		{Name: "column", Kind: resolumeRefString, Required: true},
+		{Name: "deck", Kind: resolumeRefString, Required: true},
+	},
+	ShowActionResolumeClearGroup: {
+		{Name: "group", Kind: resolumeRefNumber, Required: true},
 	},
 }
 
@@ -1651,10 +1667,12 @@ func ResolveResolumeRef(action string, ref map[string]any, resolver ResolumeRefe
 	case ShowActionResolumeClearLayer, ShowActionResolumeSetLayerBypass, ShowActionResolumeSetLayerMaster, ShowActionResolumeFadeLayer:
 		layer, _ := ref["layer"].(string)
 		return resolver.ResolveLayer(layer)
-	case ShowActionResolumeLaunchColumn:
+	case ShowActionResolumeLaunchColumn, ShowActionResolumeLaunchGroupColumn:
 		deck, _ := ref["deck"].(string)
 		column, _ := ref["column"].(string)
 		return resolver.ResolveColumn(deck, column)
+	case ShowActionResolumeClearGroup:
+		return nil
 	case ShowActionResolumeSelectDeck:
 		deck, _ := ref["deck"].(string)
 		return resolver.ResolveDeck(deck)
