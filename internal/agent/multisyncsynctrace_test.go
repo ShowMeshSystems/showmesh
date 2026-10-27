@@ -173,10 +173,10 @@ func TestMultiSyncListenerKeepsTracingDuringAnotherSessionsPrepare(t *testing.T)
 	catalogStore := heldcatalog.NewFileStore(dir)
 	newTriggerTestCatalog(t, catalogStore, "cue-trace", "trace.fseq", "cue-song-asset", "cue-song.wav", hash, 0)
 
-	logger, buf := capturingLogger()
+	_, buf := capturingLogger()
 	var logMu sync.Mutex
 	logs := func() string { logMu.Lock(); defer logMu.Unlock(); return buf.String() }
-	logger = slog.New(slog.NewTextHandler(lockedWriter{&logMu, buf}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewTextHandler(lockedWriter{&logMu, buf}, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	trigger := newMultiSyncCueAudioTrigger(logger, time.Now, nil)
 	trigger.SetSources(catalogStore, mgr, dir, multisync.NewTimeline(time.Now, multisync.Config{}), nil)
 
