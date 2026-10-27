@@ -60,16 +60,24 @@ func (h *handlers) nightStageFirstShowCueAudio(ctx context.Context, now time.Tim
 	if h.deps.Config == nil || h.deps.AssetManifests == nil || h.deps.Commands == nil {
 		return nil
 	}
-	playlistID := payload.ShowPlaylist.Playlist
-	if playlistID == "" {
-		return nil
-	}
-	entries, err := nightShowPlaylistEntries(ctx, h.deps.Config, playlistID)
-	if err != nil || len(entries) == 0 {
+	playlistName := payload.ShowPlaylist.Playlist
+	if playlistName == "" {
 		return nil
 	}
 	active, err := assetsync.ResolveActiveShow(ctx, h.deps.AssetManifests)
 	if err != nil || !active.Configured {
+		return nil
+	}
+	entries, found, err := nightShowPlaylistEntries(ctx, h.deps.Config, playlistName, active.ShowID)
+	if err != nil {
+		h.logWarn("night loop: stage first cue: read show playlists failed", "playlist", playlistName, "error", err)
+		return nil
+	}
+	if !found {
+		h.logWarn("night loop: stage first cue: no show playlist is bound to the night's FPP playlist", "playlist", playlistName)
+		return nil
+	}
+	if len(entries) == 0 {
 		return nil
 	}
 	nodeIDs, err := nightAudioNodeIDs(ctx, h.deps.Config)
@@ -261,34 +269,40 @@ func (h *handlers) nightStageFirstShowCueAudioOnNode(ctx context.Context, now ti
 	return false
 }
 
-// nightShowPlaylistEntries reads playlistID's current show.playlist
-// revision and returns its entries, or (nil, nil) when the object does
-// not exist or is tombstoned (CurrentRevision == 0) — never a
-// distinguished error for either, matching this package's established
-// "absent config reads as unavailable" posture (see nightResolveMediaPlaylist).
-func nightShowPlaylistEntries(ctx context.Context, cfg ConfigStore, playlistID string) ([]config.ShowPlaylistEntry, error) {
-	obj, err := cfg.GetConfigObject(ctx, config.ShowPlaylistConfigKind, playlistID)
+// nightShowPlaylistEntries returns the entries of the show.playlist whose
+// FPP binding names playlistName (night.session's showPlaylist.playlist is
+// the FPP playlist name, never a show.playlist object id). When several
+// match, the one in preferShowID wins, then the lowest object id. found is
+// false when none matches; absent config is not an error.
+func nightShowPlaylistEntries(ctx context.Context, cfg ConfigStore, playlistName, preferShowID string) (entries []config.ShowPlaylistEntry, found bool, err error) {
+	objs, err := cfg.ListConfigObjects(ctx, config.ShowPlaylistConfigKind)
 	if err != nil {
-		if errors.Is(err, store.ErrConfigObjectNotFound) {
-			return nil, nil
+		return nil, false, err
+	}
+	var best config.ShowPlaylistPayload
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
 		}
-		return nil, err
-	}
-	if obj.CurrentRevision == 0 {
-		return nil, nil
-	}
-	rev, err := cfg.GetConfigRevision(ctx, config.ShowPlaylistConfigKind, playlistID, obj.CurrentRevision)
-	if err != nil {
-		if errors.Is(err, store.ErrConfigRevisionNotFound) {
-			return nil, nil
+		rev, err := cfg.GetConfigRevision(ctx, config.ShowPlaylistConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			if errors.Is(err, store.ErrConfigRevisionNotFound) {
+				continue
+			}
+			return nil, false, err
 		}
-		return nil, err
+		var payload config.ShowPlaylistPayload
+		if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
+			return nil, false, err
+		}
+		if payload.FPP == nil || payload.FPP.PlaylistName != playlistName {
+			continue
+		}
+		if !found || (payload.Show == preferShowID && best.Show != preferShowID) {
+			best, found = payload, true
+		}
 	}
-	var payload config.ShowPlaylistPayload
-	if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
-		return nil, err
-	}
-	return payload.Entries, nil
+	return best.Entries, found, nil
 }
 
 // nightAudioNodeIDs lists every configured, non-tombstoned audio.node
