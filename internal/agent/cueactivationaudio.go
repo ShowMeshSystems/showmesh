@@ -229,6 +229,16 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 
 	target := audio.TargetMediaIdentity(pkgaudio.MediaRef{AssetID: out.Asset, ContentHash: contentHash})
 
+	// A MultiSync START still starting this same song is waited out, so the
+	// check below sees it playing instead of loading and starting it twice.
+	if announcement == nil {
+		release, ok := cueStartsInFlight.claim(ctx, id, target, true)
+		if !ok {
+			return "", nil, cueAudioFailure(act.CueID, "did not start", ctx.Err().Error())
+		}
+		defer release()
+	}
+
 	// ADR-051 decision 6/item 7: a session Playing under this exact
 	// MultiSync trigger is left alone. One touched but not playing already
 	// consumed a wall-clock revision above act.EvidenceAt, so derive from now().
