@@ -44,6 +44,10 @@ const MulticastGroup = "239.70.80.80"
 // packet is truncated or rejected.
 const maxDatagramSize = 65535
 
+// handlerQueueSize bounds the datagrams waiting for the handler. When it is
+// full a SYNC action packet is dropped and counted; any other packet waits.
+const handlerQueueSize = 256
+
 // Transport names which delivery path a packet arrived on: multicast,
 // broadcast, or direct unicast. RES-002 records that FPP selects among the
 // three by settings, and that the default differs by FPP version: multicast
@@ -127,10 +131,10 @@ type Received struct {
 	DecodeErr error
 }
 
-// Handler is called once per received datagram, from the Listener's single
-// read goroutine. A Handler that blocks or is slow delays reading the next
-// packet; a caller needing to do slow work per packet should hand off to
-// its own goroutine.
+// Handler is called once per received datagram, in arrival order, from one
+// handler goroutine that is separate from the socket read goroutine. A slow
+// Handler delays handling of later packets but not reading them, so
+// Received.ReceivedAt is always the time the datagram was read.
 type Handler func(Received)
 
 // JoinResult records the outcome of attempting to join MulticastGroup on
@@ -158,6 +162,9 @@ type Stats struct {
 	// whose packet type byte is not one this package decodes a payload
 	// for.
 	UnknownType uint64
+	// Dropped counts SYNC action packets discarded because the handler had
+	// fallen handlerQueueSize packets behind.
+	Dropped uint64
 }
 
 // ListenerConfig configures a Listener.
@@ -295,7 +302,7 @@ type Listener struct {
 	closeOnce sync.Once
 	closeErr  error
 
-	received, decodedOK, notFPPD, malformed, unknownType atomic.Uint64
+	received, decodedOK, notFPPD, malformed, unknownType, dropped atomic.Uint64
 }
 
 // NewListener binds the MultiSync control socket per cfg, enables
@@ -437,6 +444,7 @@ func (l *Listener) Stats() Stats {
 		NotFPPD:         l.notFPPD.Load(),
 		Malformed:       l.malformed.Load(),
 		UnknownType:     l.unknownType.Load(),
+		Dropped:         l.dropped.Load(),
 	}
 }
 
@@ -507,6 +515,20 @@ func (l *Listener) Run(ctx context.Context, handle Handler) error {
 		}
 	}()
 
+	queue := make(chan Received, handlerQueueSize)
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		for rec := range queue {
+			handle(rec)
+			l.maybeRespondToDiscover(rec)
+		}
+	}()
+	defer func() {
+		close(queue)
+		<-handlerDone
+	}()
+
 	buf := make([]byte, maxDatagramSize)
 	for {
 		n, cm, srcAddr, err := l.pconn.ReadFrom(buf)
@@ -522,10 +544,25 @@ func (l *Listener) Run(ctx context.Context, handle Handler) error {
 		copy(raw, buf[:n])
 
 		rec := l.buildReceived(raw, receivedAt, srcAddr, cm)
-		handle(rec)
-
-		l.maybeRespondToDiscover(rec)
+		select {
+		case queue <- rec:
+		default:
+			if isSyncActionPacket(rec) {
+				l.dropped.Add(1)
+				continue
+			}
+			select {
+			case queue <- rec:
+			case <-ctx.Done():
+				return nil
+			}
+		}
 	}
+}
+
+func isSyncActionPacket(rec Received) bool {
+	p, ok := rec.Payload.(SyncPacket)
+	return ok && p.Action == SyncActionSync
 }
 
 // buildReceived decodes one datagram and updates the packet counters. It is

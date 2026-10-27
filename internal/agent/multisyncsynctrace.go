@@ -91,7 +91,7 @@ func (c *multiSyncCueAudioTrigger) traceSync(ctx context.Context, mgr *audio.Man
 	audioPos := scheduledPos
 	var sinkErr time.Duration
 	sinkKnown := false
-	if snap := mgr.TimelineSnapshot(ctx); snap.Scheduled && snap.SessionID == cueActivationAudioSessionID && snap.Measured {
+	if snap := mgr.TimelineSnapshotNoWait(); snap.Scheduled && snap.SessionID == cueActivationAudioSessionID && snap.Measured {
 		sinkErr = time.Duration(snap.ErrorMs) * time.Millisecond
 		audioPos -= sinkErr
 		sinkKnown = true

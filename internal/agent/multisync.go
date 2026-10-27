@@ -115,7 +115,7 @@ func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName
 		// being called before its sources are wired, matching this
 		// function's own discover-ping tolerance for fppConnect being nil.
 		if sync.FileType == multisync.SyncFileTypeSequence && cueAudio != nil {
-			cueAudio.HandleSequencePacket(ctx, sync)
+			cueAudio.HandleSequencePacketAt(ctx, sync, rec.ReceivedAt)
 		}
 	}
 
