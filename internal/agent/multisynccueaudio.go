@@ -539,6 +539,11 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 	target := c.targetIdentity(entry)
 
 	restart := c.consumeRestart(filename, registry)
+	release, ok := cueStartsInFlight.claim(ctx, cueActivationAudioSessionID, target, !restart)
+	if !ok {
+		return
+	}
+	defer release()
 	cueIdentity, cueReady := mgr.LoadedMediaIdentity(cueActivationAudioSessionID)
 	if cueReady && cueIdentity == target && c.sessionAlreadyPlaying(ctx, mgr) {
 		if !restart {
