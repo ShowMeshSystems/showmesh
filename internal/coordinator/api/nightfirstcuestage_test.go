@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,11 +17,12 @@ import (
 // audio-only Playlist: entry-1 is video-only (no show.cue audio output,
 // proving [nightFirstAudioBearingCue]'s own scan skips it) and entry-2 is
 // the first entry that actually carries audio, authorized on both nodes.
-func nightFirstCueStageTestFixture(t *testing.T, setup *audioDispatchTestSetup, now time.Time) (nodeA, nodeB, playlistID, cueID string) {
+func nightFirstCueStageTestFixture(t *testing.T, setup *audioDispatchTestSetup, now time.Time) (nodeA, nodeB, playlistName, cueID string) {
 	t.Helper()
 	const showID, videoCueID, instanceUUID = "halloween-2026", "cue-video", "inst-1"
 	cueID = "cue-audio"
-	playlistID = "playlist-1"
+	const playlistID = "playlist-1"
+	playlistName = "Main"
 	nodeA, nodeB = "audio-01", "audio-02"
 
 	putShowForTest(t, setup.st, showID, "Halloween 2026")
@@ -50,7 +54,7 @@ func nightFirstCueStageTestFixture(t *testing.T, setup *audioDispatchTestSetup, 
 	putActiveShowForTest(t, setup.st, showID)
 	putAuthorizedAudioAssetForTest(t, setup.st, showID, cueID, nodeA, now)
 	putAuthorizedAudioAssetForTest(t, setup.st, showID, cueID, nodeB, now)
-	return nodeA, nodeB, playlistID, cueID
+	return nodeA, nodeB, playlistName, cueID
 }
 
 func mustEncodeShowCuePayloadForTest(t *testing.T, p config.ShowCuePayload) string {
@@ -70,7 +74,7 @@ func TestNightStageFirstShowCueAudioStagesNothingForAnEmptyPlaylist(t *testing.T
 	putPlaylistForTest(t, setup.st, playlistID, config.ShowPlaylistPayload{
 		Show: "halloween-2026", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
 		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
-		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Empty", PlaylistHash: hash64ForTest("a1")},
 		Entries:        []config.ShowPlaylistEntry{},
 	})
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
@@ -79,7 +83,7 @@ func TestNightStageFirstShowCueAudioStagesNothingForAnEmptyPlaylist(t *testing.T
 	deps.AssetManifests = setup.st
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", StateEnteredAt: now}
-	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: "Empty"}}
 
 	if unstaged := h.nightStageFirstShowCueAudio(context.Background(), now, rec, payload); len(unstaged) != 0 {
 		t.Fatalf("unstagedNodes = %v, want none", unstaged)
@@ -98,7 +102,7 @@ func TestNightStageFirstShowCueAudioStagesNothingForAnEmptyPlaylist(t *testing.T
 func TestNightStageFirstShowCueAudioStagesEveryAudioNode(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
-	nodeA, nodeB, playlistID, cueID := nightFirstCueStageTestFixture(t, setup, now)
+	nodeA, nodeB, playlistName, cueID := nightFirstCueStageTestFixture(t, setup, now)
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
 
 	deps := setup.deps()
@@ -106,7 +110,7 @@ func TestNightStageFirstShowCueAudioStagesEveryAudioNode(t *testing.T) {
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 
 	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", StateEnteredAt: now}
-	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistName}}
 
 	unstaged := h.nightStageFirstShowCueAudio(context.Background(), now, rec, payload)
 	if len(unstaged) != 0 {
@@ -150,7 +154,7 @@ func TestNightStageFirstShowCueAudioStagesEveryAudioNode(t *testing.T) {
 func TestNightStageFirstShowCueAudioRepeatTickSkipsAlreadyDispatched(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
-	_, _, playlistID, _ := nightFirstCueStageTestFixture(t, setup, now)
+	_, _, playlistName, _ := nightFirstCueStageTestFixture(t, setup, now)
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
 
 	deps := setup.deps()
@@ -158,7 +162,7 @@ func TestNightStageFirstShowCueAudioRepeatTickSkipsAlreadyDispatched(t *testing.
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 
 	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", StateEnteredAt: now}
-	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistName}}
 
 	h.nightStageFirstShowCueAudio(context.Background(), now, rec, payload)
 	afterFirst := len(setup.pub.dispatched)
@@ -184,14 +188,14 @@ func TestNightStageFirstShowCueAudioRepeatTickSkipsAlreadyDispatched(t *testing.
 func TestNightStageFirstShowCueAudioSecondEntryRestagesWithNewKeysAndHigherRevisions(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
-	nodeA, _, playlistID, _ := nightFirstCueStageTestFixture(t, setup, now)
+	nodeA, _, playlistName, _ := nightFirstCueStageTestFixture(t, setup, now)
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
 
 	deps := setup.deps()
 	deps.AssetManifests = setup.st
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 
-	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistName}}
 
 	firstEntry := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", Cycle: 1, StateEnteredAt: now}
 	if unstaged := h.nightStageFirstShowCueAudio(context.Background(), now, firstEntry, payload); len(unstaged) != 0 {
@@ -243,7 +247,7 @@ func TestNightStageFirstShowCueAudioSecondEntryRestagesWithNewKeysAndHigherRevis
 func TestNightKickOffFirstCueStageRunsInBackgroundAndNeverBlocks(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
-	nodeA, nodeB, playlistID, _ := nightFirstCueStageTestFixture(t, setup, now)
+	nodeA, nodeB, playlistName, _ := nightFirstCueStageTestFixture(t, setup, now)
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
 	release := make(chan struct{})
 	setup.pub.onAwaitResponseForNode = map[string]func(){
@@ -256,7 +260,7 @@ func TestNightKickOffFirstCueStageRunsInBackgroundAndNeverBlocks(t *testing.T) {
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 
 	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", Cycle: 1, StateEnteredAt: now}
-	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistName}}
 
 	started := time.Now()
 	h.nightKickOffFirstCueStage(context.Background(), now, rec, payload)
@@ -303,7 +307,7 @@ func TestNightKickOffFirstCueStageRunsInBackgroundAndNeverBlocks(t *testing.T) {
 func TestNightStageFirstShowCueAudioSlowNodeReportedUnstagedAndBounded(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
-	nodeA, nodeB, playlistID, _ := nightFirstCueStageTestFixture(t, setup, now)
+	nodeA, nodeB, playlistName, _ := nightFirstCueStageTestFixture(t, setup, now)
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
 	release := make(chan struct{})
 	setup.pub.onAwaitResponseForNode = map[string]func(){
@@ -316,7 +320,7 @@ func TestNightStageFirstShowCueAudioSlowNodeReportedUnstagedAndBounded(t *testin
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 
 	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", StateEnteredAt: now}
-	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistName}}
 
 	started := time.Now()
 	unstaged := h.nightStageFirstShowCueAudio(context.Background(), now, rec, payload)
@@ -361,7 +365,7 @@ func TestNightStageFirstShowCueAudioStagesEachNodesOwnFirstSong(t *testing.T) {
 	putPlaylistForTest(t, setup.st, playlistID, config.ShowPlaylistPayload{
 		Show: "halloween-2026", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
 		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
-		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Solo First", PlaylistHash: hash64ForTest("a1")},
 		Entries: []config.ShowPlaylistEntry{
 			{ID: "entry-1", Cue: soloCueID, FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
 			{ID: "entry-2", Cue: sharedCueID, FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1}},
@@ -374,7 +378,7 @@ func TestNightStageFirstShowCueAudioStagesEachNodesOwnFirstSong(t *testing.T) {
 	deps.AssetManifests = setup.st
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", StateEnteredAt: now}
-	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: "Solo First"}}
 
 	if unstaged := h.nightStageFirstShowCueAudio(context.Background(), now, rec, payload); len(unstaged) != 0 {
 		t.Fatalf("unstagedNodes = %v, want none", unstaged)
@@ -388,5 +392,45 @@ func TestNightStageFirstShowCueAudioStagesEachNodesOwnFirstSong(t *testing.T) {
 		if got := media["assetId"]; got != wantAsset {
 			t.Fatalf("node %q: staged %v, want %q, the first song this node plays", nodeID, got, wantAsset)
 		}
+	}
+}
+
+func TestNightStageFirstShowCueAudioWarnsWhenNoShowPlaylistMatchesTheFPPPlaylistName(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeA, _, _, _ := nightFirstCueStageTestFixture(t, setup, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	var logBuf bytes.Buffer
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: slog.New(slog.NewTextHandler(&logBuf, nil))}
+	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", StateEnteredAt: now}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: "playlist-1"}}
+
+	h.nightStageFirstShowCueAudio(context.Background(), now, rec, payload)
+
+	if got := dispatchedActionsToSessionForNode(setup, cueactivation.PrepareStagingSessionID, nodeA); len(got) != 0 {
+		t.Fatalf("node %q: dispatched %d commands for an unmatched playlist, want 0", nodeA, len(got))
+	}
+	if log := logBuf.String(); !strings.Contains(log, "no show playlist is bound") || !strings.Contains(log, "playlist-1") {
+		t.Fatalf("log = %q, want a warning naming the unmatched playlist", log)
+	}
+}
+
+func TestNightShowPlaylistEntriesPrefersTheActiveShow(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nightFirstCueStageTestFixture(t, setup, now)
+	putPlaylistForTest(t, setup.st, "a-other-show", config.ShowPlaylistPayload{
+		Show: "other-show", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a2")},
+		Entries:        []config.ShowPlaylistEntry{},
+	})
+
+	entries, found, err := nightShowPlaylistEntries(context.Background(), setup.st, "Main", "halloween-2026")
+	if err != nil || !found || len(entries) != 2 {
+		t.Fatalf("entries = %d, found = %v, err = %v; want the active show's 2 entries", len(entries), found, err)
 	}
 }

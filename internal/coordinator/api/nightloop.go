@@ -1115,8 +1115,8 @@ const nightCycleInterruptedOutcomeReason = "FPP left the show before its last se
 // after rec.StateEnteredAt, the moment this cycle's show went live. Missing
 // or stale evidence never resolves to completed; it resolves to unknown.
 func (h *handlers) nightResolveCycleOutcome(ctx context.Context, rec store.NightSessionRecord, anchor nightContentAnchor) (outcome, reason string) {
-	entries, err := nightShowPlaylistEntries(ctx, h.deps.Config, anchor.Playlist)
-	if err != nil || len(entries) == 0 {
+	entries, found, err := nightShowPlaylistEntries(ctx, h.deps.Config, anchor.Playlist, "")
+	if err != nil || !found || len(entries) == 0 {
 		return store.NightCycleOutcomeUnknown, nightCycleUnknownOutcomeReason
 	}
 	last := entries[len(entries)-1].FPP
