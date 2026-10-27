@@ -339,6 +339,12 @@ func (c *multiSyncCueAudioTrigger) currentGeneration() uint64 {
 // ctx bounds only the audio.Manager calls this makes; the caller already
 // ties it to agent shutdown.
 func (c *multiSyncCueAudioTrigger) HandleSequencePacket(ctx context.Context, pkt multisync.SyncPacket) {
+	c.HandleSequencePacketAt(ctx, pkt, c.now())
+}
+
+// HandleSequencePacketAt is HandleSequencePacket for a packet read off the
+// socket at receivedAt, which may be well before this call.
+func (c *multiSyncCueAudioTrigger) HandleSequencePacketAt(ctx context.Context, pkt multisync.SyncPacket, receivedAt time.Time) {
 	if pkt.FileType != multisync.SyncFileTypeSequence {
 		// Belt and suspenders: the caller (multisync.go) already filters
 		// to sequence packets before calling here, but this method's own
@@ -355,9 +361,13 @@ func (c *multiSyncCueAudioTrigger) HandleSequencePacket(ctx context.Context, pkt
 		return
 	}
 
-	// Recorded at receive time, before any other work, on the SAME clock
-	// a scheduled start's own T0 is read on (ADR-051 decision 1).
+	// The media clock read, minus the time this packet waited behind the
+	// listener loop: receive time on the SAME clock a scheduled start's own
+	// T0 is read on (ADR-051 decision 1).
 	arrival := mgr.MediaNow(ctx)
+	if wait := c.now().Sub(receivedAt); arrival.Valid && wait > 0 {
+		arrival.Time = arrival.Time.Add(-wait)
+	}
 
 	entry, ok := c.lookup(pkt.Filename, catalogStore)
 	if !ok {

@@ -91,3 +91,30 @@ func TestMultiSyncCueAudioSyncTraceReportsErrorAgainstFPP(t *testing.T) {
 		t.Fatalf("summary does not report three samples with zero error:\n%s", out)
 	}
 }
+
+// A SYNC packet read off the socket while the listener loop was stalled is
+// stamped when it was received, not when the loop got to it.
+func TestMultiSyncCueAudioSyncIsStampedAtReceiveAfterAStall(t *testing.T) {
+	trigger, _, media, clk, logs := newSyncTraceTestTrigger(t, agentclock.StateLocked)
+
+	before := media.reads()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		trigger.HandleSequencePacket(context.Background(), syncPacket(multisync.SyncActionStart, 0))
+	}()
+	media.waitForReads(t, before+2)
+	media.advance(200 * time.Millisecond)
+	<-done
+
+	media.advance(800 * time.Millisecond)
+	receivedAt := clk.now()
+	const stall = 2 * time.Second
+	media.advance(stall)
+	clk.advance(stall)
+	trigger.HandleSequencePacketAt(context.Background(), syncPacket(multisync.SyncActionSync, 1), receivedAt)
+
+	if out := logs(); !strings.Contains(out, " error_ms=0") {
+		t.Fatalf("SYNC received 1s after START and processed 2s later should trace zero error:\n%s", out)
+	}
+}
