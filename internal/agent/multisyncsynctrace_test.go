@@ -218,11 +218,16 @@ func TestMultiSyncListenerKeepsTracingDuringAnotherSessionsPrepare(t *testing.T)
 	})
 
 	loadStarted, release := gated.hold()
-	defer release()
 	stagingID := pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)
 	ref := pkgaudio.MediaRef{AssetID: "cue-song-asset", ContentHash: hash, RuntimeFilename: "cue-song.wav"}
 	mgr.Apply(context.Background(), stagingID, "stage-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
-	go mgr.Prepare(context.Background(), stagingID, "stage-prepare", 2)
+	// The Prepare writes session state on return, so it must finish before TempDir cleanup runs.
+	prepareDone := make(chan struct{})
+	t.Cleanup(func() { release(); <-prepareDone })
+	go func() {
+		defer close(prepareDone)
+		mgr.Prepare(context.Background(), stagingID, "stage-prepare", 2)
+	}()
 	select {
 	case <-loadStarted:
 	case <-time.After(5 * time.Second):
