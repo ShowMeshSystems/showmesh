@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -558,4 +559,108 @@ func TestListener_AllowPortSharing_EnabledAllowsSecondBindOnSamePort(t *testing.
 		t.Fatalf("second NewListener() with AllowPortSharing=true on the same address: error = %v, want nil (same-process, same-UID coexistence must work)", err)
 	}
 	defer func() { _ = l2.Close() }()
+}
+
+func syncDatagram(t *testing.T, action SyncAction) []byte {
+	t.Helper()
+	b, err := EncodeSync(SyncPacket{Action: action, FileType: SyncFileTypeSequence, Filename: "a.fseq"})
+	if err != nil {
+		t.Fatalf("EncodeSync() error = %v", err)
+	}
+	return b
+}
+
+// A packet that arrives while the handler is stuck on an earlier one is
+// stamped when it arrived, not when the handler gets to it.
+func TestListener_ReceivedAtIsStampedAtReadWhileHandlerIsBlocked(t *testing.T) {
+	cfg := ListenerConfig{ListenAddr: "127.0.0.1:0"}
+	l, err := NewListener(cfg)
+	if err != nil {
+		t.Fatalf("NewListener() error = %v", err)
+	}
+	release := make(chan struct{})
+	got := make(chan Received, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		first := true
+		done <- l.Run(ctx, func(r Received) {
+			if first {
+				first = false
+				<-release
+			}
+			got <- r
+		})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+
+	sendTo(t, l, syncDatagram(t, SyncActionStart))
+	time.Sleep(50 * time.Millisecond)
+	sentAt := time.Now()
+	sendTo(t, l, syncDatagram(t, SyncActionSync))
+	time.Sleep(500 * time.Millisecond)
+	close(release)
+
+	recvOne(t, got)
+	second := recvOne(t, got)
+	if late := second.ReceivedAt.Sub(sentAt); late > 200*time.Millisecond {
+		t.Fatalf("ReceivedAt is %v after the packet was sent, want it stamped at read", late)
+	}
+}
+
+// When the handler falls far behind, SYNC packets are dropped and counted
+// and a STOP is still delivered.
+func TestListener_FullQueueDropsSyncAndKeepsStop(t *testing.T) {
+	l, err := NewListener(ListenerConfig{ListenAddr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("NewListener() error = %v", err)
+	}
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var actions []SyncAction
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- l.Run(ctx, func(r Received) {
+			<-release
+			if p, ok := r.Payload.(SyncPacket); ok {
+				mu.Lock()
+				actions = append(actions, p.Action)
+				mu.Unlock()
+			}
+		})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+
+	conn, err := net.DialUDP("udp4", nil, l.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("DialUDP() error = %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	syncB := syncDatagram(t, SyncActionSync)
+	for i := 0; i < handlerQueueSize+100; i++ {
+		_, _ = conn.Write(syncB)
+		if i%32 == 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	waitUntil := time.Now().Add(recvTimeout)
+	for l.Stats().Dropped == 0 && time.Now().Before(waitUntil) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if l.Stats().Dropped == 0 {
+		t.Fatalf("Dropped = 0 after overfilling the handler queue")
+	}
+	_, _ = conn.Write(syncDatagram(t, SyncActionStop))
+	close(release)
+
+	for end := time.Now().Add(recvTimeout); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		mu.Lock()
+		n := len(actions)
+		mu.Unlock()
+		if n > 0 && actions[n-1] == SyncActionStop {
+			return
+		}
+	}
+	t.Fatalf("STOP was not delivered after the queue filled")
 }

@@ -143,6 +143,16 @@ func notScheduledSnapshot(reason string) TimelineSnapshot {
 // reports the lowest session id among them, deterministically, rather
 // than whichever the map iterated first.
 func (m *Manager) TimelineSnapshot(ctx context.Context) TimelineSnapshot {
+	return m.timelineSnapshot(false)
+}
+
+// TimelineSnapshotNoWait is TimelineSnapshot that skips a session whose lock
+// is held (for example by a Prepare) instead of waiting for it.
+func (m *Manager) TimelineSnapshotNoWait() TimelineSnapshot {
+	return m.timelineSnapshot(true)
+}
+
+func (m *Manager) timelineSnapshot(noWait bool) TimelineSnapshot {
 	m.mu.Lock()
 	sessions := make([]*Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
@@ -152,7 +162,13 @@ func (m *Manager) TimelineSnapshot(ctx context.Context) TimelineSnapshot {
 
 	var best TimelineSnapshot
 	for _, s := range sessions {
-		s.mu.Lock()
+		if noWait {
+			if !s.mu.TryLock() {
+				continue
+			}
+		} else {
+			s.mu.Lock()
+		}
 		snap, ok := s.timelineSnapshotLocked()
 		s.mu.Unlock()
 		if !ok {
