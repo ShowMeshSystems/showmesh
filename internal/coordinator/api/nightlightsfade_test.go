@@ -433,6 +433,7 @@ func TestLightsFade_FadeOutFinishesWhenRestingEnds(t *testing.T) {
 // Ticks that land just after each whole second before the resting end used to
 // enter the transition one tick inside the fade window and send the fade on
 // the next, with under a second left: a cut on every show after the first.
+// The loop now wakes at the fade's start, which the last tick here stands for.
 func TestLightsFade_LaterShowsGetTheWholeFadeWhateverTheTickPhase(t *testing.T) {
 	n := newLightsNight(t, `"lightsFadeOutMs": 2000, `)
 	n.openToFirstShow()
@@ -444,19 +445,25 @@ func TestLightsFade_LaterShowsGetTheWholeFadeWhateverTheTickPhase(t *testing.T) 
 	n.tick()
 	n.mustState("before the transition", nightStateRestingIntershow)
 	before := len(n.events())
-	var fade string
-	for i := 0; i < 4 && fade == ""; i++ {
-		n.advance(time.Second)
+	wake := n.h.nightLoopWake()
+	for _, at := range []time.Duration{-3180 * time.Millisecond, -2180 * time.Millisecond, -2 * time.Second} {
+		select {
+		case <-wake:
+		default:
+		}
+		n.advance(end.Add(at).Sub(n.now))
 		n.host.setPlaying("halloween-resting", 0)
 		n.tick()
-		for _, e := range n.events()[before:] {
-			if strings.HasPrefix(e, "gain:player-01:0:") {
-				fade = e
+		if at == -2180*time.Millisecond {
+			select {
+			case <-wake:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the tick before the fade must wake the loop at the fade's start")
 			}
 		}
 	}
-	if fade != "gain:player-01:0:2s" && fade != "gain:player-01:0:3s" {
-		t.Fatalf("the fade-out must run at least its configured 2s and end at the show start; got %q in %v", fade, n.events()[before:])
+	if got := joined(n.events()[before:]); got != "gain:player-01:0:2s" {
+		t.Fatalf("the fade-out must run its configured 2s and end at the show start; got %v", got)
 	}
 }
 
@@ -476,18 +483,18 @@ func TestLightsFade_FirstShowFadesOutOfPreshow(t *testing.T) {
 	n.tick()
 	n.mustState("before the fade", nightStateTransitionToShow)
 
-	n.advance(1500 * time.Millisecond)
+	n.advance(2 * time.Second)
 	n.host.setPlaying("halloween-resting", 0)
 	n.tick()
-	if got := joined(n.events()[before:]); got != "gain:player-01:0:3s" {
-		t.Fatalf("start-night must fade the pre-show resting look out by the show start; got %v", got)
+	if got := joined(n.events()[before:]); got != "gain:player-01:0:2s" {
+		t.Fatalf("start-night must fade the pre-show resting look out over 2s; got %v", got)
 	}
 
-	n.advance(2500 * time.Millisecond)
+	n.advance(2 * time.Second)
 	n.host.setPlaying("halloween-resting", 0)
 	n.tick()
 	n.mustState("first show launch", nightStateLive)
-	want := "gain:player-01:0:3s,start:halloween-show,gain:player-01:100:0s"
+	want := "gain:player-01:0:2s,start:halloween-show,gain:player-01:100:0s"
 	if got := joined(n.events()[before:]); got != want {
 		t.Fatalf("events around the first show = %v, want %v", got, want)
 	}
