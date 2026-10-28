@@ -135,15 +135,16 @@ func (h *handlers) nightCheckBackgroundAudioNodeSetup(ctx context.Context, now t
 }
 
 // nightCheckBackgroundAudioItemTargets warns when the show's audio nodes
-// send the bed somewhere other than the node an item names. ok is false
-// when the show's audio nodes did not decide where the bed plays.
+// send the bed somewhere other than the node an item names. An item that
+// names no node has nothing to disagree with. ok is false when the show's
+// audio nodes did not decide where the bed plays.
 func nightCheckBackgroundAudioItemTargets(ba *config.NightSessionBackgroundAudio, resolved []string, resolvedFrom config.AudioNodeResolution) (check nightReadinessCheck, ok bool) {
 	if resolvedFrom != config.AudioNodeResolutionShow {
 		return nightReadinessCheck{}, false
 	}
 	var reasons []string
 	for _, item := range ba.Items {
-		if slices.Contains(resolved, item.Asset.Target) {
+		if item.Asset.Target == "" || slices.Contains(resolved, item.Asset.Target) {
 			continue
 		}
 		reasons = append(reasons, fmt.Sprintf(

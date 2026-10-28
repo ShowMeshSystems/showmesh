@@ -80,6 +80,18 @@ func TestNightBackgroundAudioReadiness_ConfiguredNodePasses(t *testing.T) {
 	}
 }
 
+func TestNightBackgroundAudioItemTargets_ItemWithoutNodeIsHealthy(t *testing.T) {
+	ba := &config.NightSessionBackgroundAudio{Items: []config.NightSessionBackgroundAudioItem{
+		{ItemID: "watching-me", Asset: config.NightSessionAssetRef{Show: movedAudioShow, Sequence: "watching-me"}},
+	}}
+
+	check, ok := nightCheckBackgroundAudioItemTargets(ba, []string{"node-a", "node-b"}, config.AudioNodeResolutionShow)
+
+	if !ok || check.health != nightHealthHealthy() || len(check.reasons) != 0 {
+		t.Fatalf("check = %+v (ok %v), want healthy with no reasons for an item that names no node", check, ok)
+	}
+}
+
 func TestNightBackgroundAudioNodeSetup_LostProgramInterfaceFails(t *testing.T) {
 	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
 	putAudioNodeForTest(t, st, "node-a")
