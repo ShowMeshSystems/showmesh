@@ -16,7 +16,7 @@ ARG TARGETARCH
 COPY deploy/node/ndi-plugin/build-ndi-plugin.sh /usr/local/bin/build-ndi-plugin.sh
 RUN /usr/local/bin/build-ndi-plugin.sh /${TARGETARCH}
 
-FROM --platform=$BUILDPLATFORM golang:1.26.9-bookworm AS gateway
+FROM --platform=$BUILDPLATFORM golang:1.26.10-bookworm AS gateway
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
