@@ -37,6 +37,7 @@ type lightsNight struct {
 
 	mu            sync.Mutex
 	log           []string
+	windows       []nightLightingFade
 	gains         int
 	gainsAtStart  int
 	awaitShowGain bool
@@ -269,6 +270,9 @@ func newLightsNightWithCues(t *testing.T, extra, showCues, restingCues string) *
 			fail := n.failIf != nil && n.failIf(fade, target.InstanceID)
 			hang := n.hang
 			n.gains++
+			if !fade.EndsAt.IsZero() {
+				n.windows = append(n.windows, fade)
+			}
 			n.mu.Unlock()
 			n.record(fmt.Sprintf("gain:%s:%d:%ds", target.InstanceID, fade.TargetPercent, fade.FadeSeconds))
 			if hang {
@@ -352,6 +356,20 @@ func (n *lightsNight) restingEnd() time.Time {
 	return *b.ExpectedAt
 }
 
+// mustWindow checks the newest scheduled gain write runs from startsAt to endsAt.
+func (n *lightsNight) mustWindow(startsAt, endsAt time.Time) {
+	n.t.Helper()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.windows) == 0 {
+		n.t.Fatal("no scheduled gain write was sent")
+	}
+	w := n.windows[len(n.windows)-1]
+	if !w.StartsAt.Equal(startsAt) || !w.EndsAt.Equal(endsAt) {
+		n.t.Fatalf("scheduled fade runs %s to %s, want %s to %s", w.StartsAt, w.EndsAt, startsAt, endsAt)
+	}
+}
+
 func eventIndex(events []string, want string) int {
 	for i, e := range events {
 		if e == want {
@@ -430,6 +448,33 @@ func TestLightsFade_FadeOutFinishesWhenRestingEnds(t *testing.T) {
 	}
 }
 
+// Ticks that land just after each whole second used to send the fade with
+// under a second left, a cut on every show after the first. The fade is now
+// sent ahead with its exact window, whatever its length or the tick phase.
+func TestLightsFade_LaterShowsFadeOnAnExactWindowWhateverTheTickPhase(t *testing.T) {
+	for _, ms := range []int{2000, 2500, 15000} {
+		t.Run(fmt.Sprintf("%dms", ms), func(t *testing.T) {
+			n := newLightsNight(t, fmt.Sprintf(`"lightsFadeOutMs": %d, `, ms))
+			n.openToFirstShow()
+			n.endShowIntoResting()
+			end := n.restingEnd()
+			startsAt := end.Add(-time.Duration(ms) * time.Millisecond)
+
+			n.advance(end.Add(-time.Duration(ms)*time.Millisecond - 4180*time.Millisecond).Sub(n.now))
+			sent := len(n.windows)
+			for n.now.Before(startsAt) && len(n.windows) == sent {
+				n.host.setPlaying("halloween-resting", 0)
+				n.tick()
+				n.advance(time.Second)
+			}
+			if len(n.windows) == sent {
+				t.Fatalf("the fade-out was not sent before %s, its start", startsAt)
+			}
+			n.mustWindow(startsAt, end)
+		})
+	}
+}
+
 // Pre-show plays the resting sequence, so the first show fades out of it like
 // every later show, with start-night waiting out the fade.
 func TestLightsFade_FirstShowFadesOutOfPreshow(t *testing.T) {
@@ -439,8 +484,8 @@ func TestLightsFade_FirstShowFadesOutOfPreshow(t *testing.T) {
 	before := len(n.events())
 
 	mustNightCommand(t, n.api, n.token, "start-night")
-	if got, want := n.restingEnd(), n.now.Add(2*time.Second); !got.Equal(want) {
-		t.Fatalf("start-night show start = %s, want %s: the first show must wait out the fade", got, want)
+	if got, want := n.restingEnd(), n.now.Add(5*time.Second); !got.Equal(want) {
+		t.Fatalf("start-night show start = %s, want %s: the first show must wait out the fade and its send-ahead", got, want)
 	}
 	n.host.setPlaying("halloween-resting", 0)
 	n.tick()
@@ -449,7 +494,9 @@ func TestLightsFade_FirstShowFadesOutOfPreshow(t *testing.T) {
 		t.Fatalf("start-night must fade the pre-show resting look out over 2s; got %v", got)
 	}
 
-	n.advance(2 * time.Second)
+	n.mustWindow(n.restingEnd().Add(-2*time.Second), n.restingEnd())
+
+	n.advance(5 * time.Second)
 	n.host.setPlaying("halloween-resting", 0)
 	n.tick()
 	n.mustState("first show launch", nightStateLive)
@@ -490,19 +537,17 @@ func TestLightsFade_FadeOutRunsWhenAnEnterShowCueFiresAheadOfTheWindow(t *testin
 
 			n.advance(end.Add(-30 * time.Second).Sub(n.now))
 			n.host.setPlaying("halloween-resting", 0)
+			before := len(n.events())
 			n.tick()
 			n.mustState("transition begins at the cue lead", nightStateTransitionToShow)
 			n.tick()
 			if !n.session().ShowCommitted {
 				t.Fatal("the cue ahead of the window should have committed the show")
 			}
-			before := len(n.events())
-
-			n.advance(20 * time.Second)
-			n.tick()
 			if got := joined(n.events()[before:]); got != "gain:player-01:0:10s" {
-				t.Fatalf("the fade-out must run at E minus 10s even after the show committed; got %q", got)
+				t.Fatalf("the fade-out must be sent with the show committed; got %q", got)
 			}
+			n.mustWindow(end.Add(-10*time.Second), end)
 		})
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // gainServer answers one transition-gain POST with body, recording what
@@ -182,5 +183,33 @@ func TestSetTransitionGainReportsAnHTTPRefusal(t *testing.T) {
 	// surface can report it rather than paraphrasing.
 	if !strings.Contains(out.Body, "must be between 0 and 100") {
 		t.Errorf("Body = %q, want the host's own refusal text", out.Body)
+	}
+}
+
+func TestSetScheduledTransitionGainSendsTheWindowInEpochMilliseconds(t *testing.T) {
+	g := newGainServer(t, http.StatusOK, appliedBody)
+	startsAt := time.UnixMilli(1_800_000_002_500)
+	endsAt := time.UnixMilli(1_800_000_005_000)
+
+	if _, err := g.client(t).SetScheduledTransitionGain(context.Background(), 0, 3, startsAt, endsAt, "req-1"); err != nil {
+		t.Fatalf("SetScheduledTransitionGain: %v", err)
+	}
+	if got := g.received["startsAtMs"]; got != float64(1_800_000_002_500) {
+		t.Errorf("startsAtMs = %v", got)
+	}
+	if got := g.received["endsAtMs"]; got != float64(1_800_000_005_000) {
+		t.Errorf("endsAtMs = %v", got)
+	}
+}
+
+func TestSetTransitionGainSendsNoWindow(t *testing.T) {
+	g := newGainServer(t, http.StatusOK, appliedBody)
+	if _, err := g.client(t).SetTransitionGain(context.Background(), 75, 30, "req-1"); err != nil {
+		t.Fatalf("SetTransitionGain: %v", err)
+	}
+	for _, k := range []string{"startsAtMs", "endsAtMs"} {
+		if _, ok := g.received[k]; ok {
+			t.Errorf("an immediate write sent %s", k)
+		}
 	}
 }

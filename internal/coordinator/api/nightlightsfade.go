@@ -58,6 +58,7 @@ type nightLightsStep struct {
 	step       string
 	target     int
 	seconds    int
+	startsAt   time.Time
 	endsAt     time.Time
 	instances  []string
 	oneShot    bool
@@ -202,13 +203,22 @@ func nightLightsFadeSeconds(d time.Duration) int {
 	return int((d + 500*time.Millisecond) / time.Second)
 }
 
+// nightFadeOutSendAhead is how far ahead of its start the fade-out is
+// sent: the tick that enters the transition, the tick that sends it, and
+// a second for the request to arrive.
+const nightFadeOutSendAhead = 3 * time.Second
+
 // nightTransitionLeadMs is how long before the resting sequence ends the
-// transition into a show begins: the longest cue lead or lights fade-out.
+// transition into a show begins: the longest cue lead, or the longest
+// fade-out plus [nightFadeOutSendAhead].
 func nightTransitionLeadMs(p config.NightSessionPayload) int64 {
 	lead := nightEnterShowLeadMs(p.EnterShow.Cues)
 	for _, ms := range []*int{p.LightsFadeOutMs, nightRenderFadeOutMs(p)} {
-		if ms != nil && int64(*ms) > lead {
-			lead = int64(*ms)
+		if ms == nil {
+			continue
+		}
+		if fade := int64(*ms) + nightFadeOutSendAhead.Milliseconds(); fade > lead {
+			lead = fade
 		}
 	}
 	return lead
@@ -330,7 +340,11 @@ func (h *handlers) nightLightsLaunchDue(ctx context.Context, now time.Time, st *
 			seconds := st.seconds
 			switch {
 			case !st.endsAt.IsZero():
-				seconds = nightLightsFadeSeconds(st.endsAt.Sub(now))
+				from := now
+				if st.startsAt.After(now) {
+					from = st.startsAt
+				}
+				seconds = nightLightsFadeSeconds(st.endsAt.Sub(from))
 			case late && st.target == 100:
 				seconds = 0
 			}
@@ -358,7 +372,7 @@ func (h *handlers) nightLightsWrite(ctx context.Context, st *nightLightsStep, in
 	wctx, cancel := context.WithTimeout(ctx, nightLightsGainTimeout)
 	defer cancel()
 	target := config.ShowActionTarget{Integration: config.ShowActionIntegrationFPP, InstanceID: instanceID}
-	_, err := write(wctx, target, nightLightingFade{TargetPercent: st.target, FadeSeconds: seconds}, request)
+	_, err := write(wctx, target, nightLightingFade{TargetPercent: st.target, FadeSeconds: seconds, StartsAt: st.startsAt, EndsAt: st.endsAt}, request)
 
 	l.mu.Lock()
 	is := st.inst[instanceID]
@@ -438,17 +452,18 @@ func (h *handlers) nightAdvanceLightsFadeOut(ctx context.Context, now time.Time,
 	if !firstShow && (!has || anchor.Purpose != nightAnchorPurposeRestingOneShot) {
 		return
 	}
-	inWindow := func(ms int) bool {
-		return !now.Before(boundaryE.Add(-time.Duration(ms)*time.Millisecond)) && now.Before(boundaryE)
+	if !now.Before(boundaryE) {
+		return
 	}
-	if renderMs != nil && inWindow(*renderMs) {
+	if renderMs != nil {
 		h.nightRenderFade(ctx, now, rec, "out", 0, boundaryE.Add(-time.Duration(*renderMs)*time.Millisecond), boundaryE, 0)
 	}
-	if payload.LightsFadeOutMs == nil || !inWindow(*payload.LightsFadeOutMs) {
+	if payload.LightsFadeOutMs == nil {
 		return
 	}
 	h.lights().markFadeOut(rec)
-	h.nightLightsStart(ctx, now, rec, payload, nightLightsStep{step: nightLightsStepFadeOut, target: 0, endsAt: boundaryE})
+	startsAt := boundaryE.Add(-time.Duration(*payload.LightsFadeOutMs) * time.Millisecond)
+	h.nightLightsStart(ctx, now, rec, payload, nightLightsStep{step: nightLightsStepFadeOut, target: 0, startsAt: startsAt, endsAt: boundaryE})
 }
 
 // nightRestingStopped reports whether current evidence shows the resting

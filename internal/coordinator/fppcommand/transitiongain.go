@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 // The brightness transition-gain write, FPP-PLUGIN-COORDINATOR-CONTRACTS.md
@@ -45,6 +46,8 @@ type transitionGainRequest struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	TargetPercent int    `json:"targetPercent"`
 	FadeSeconds   int    `json:"fadeSeconds"`
+	StartsAtMs    int64  `json:"startsAtMs,omitempty"`
+	EndsAtMs      int64  `json:"endsAtMs,omitempty"`
 	RequestID     string `json:"requestId"`
 }
 
@@ -100,6 +103,13 @@ type transitionGainResponse struct {
 // answering a ShowMesh contract, not FPP's own unconditional success
 // body. It is still not evidence the audience saw a change.
 func (c *Client) SetTransitionGain(ctx context.Context, targetPercent, fadeSeconds int, requestID string) (TransitionGainOutcome, error) {
+	return c.SetScheduledTransitionGain(ctx, targetPercent, fadeSeconds, time.Time{}, time.Time{}, requestID)
+}
+
+// SetScheduledTransitionGain is [Client.SetTransitionGain] on a fixed
+// window: with endsAt set, the plugin holds the gain until startsAt (now
+// when zero) and reaches targetPercent at endsAt on its own clock.
+func (c *Client) SetScheduledTransitionGain(ctx context.Context, targetPercent, fadeSeconds int, startsAt, endsAt time.Time, requestID string) (TransitionGainOutcome, error) {
 	if requestID == "" {
 		return TransitionGainOutcome{}, fmt.Errorf("fppcommand: transition gain requires a requestId")
 	}
@@ -117,6 +127,8 @@ func (c *Client) SetTransitionGain(ctx context.Context, targetPercent, fadeSecon
 		SchemaVersion: TransitionGainSchemaVersion,
 		TargetPercent: targetPercent,
 		FadeSeconds:   fadeSeconds,
+		StartsAtMs:    epochMillis(startsAt),
+		EndsAtMs:      epochMillis(endsAt),
 		RequestID:     requestID,
 	})
 	if err != nil {
@@ -169,4 +181,11 @@ func (c *Client) SetTransitionGain(ctx context.Context, targetPercent, fadeSecon
 	outcome.Ceiling = decoded.Ceiling
 	outcome.EffectiveOutput = decoded.EffectiveOutput
 	return outcome, nil
+}
+
+func epochMillis(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
 }
