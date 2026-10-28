@@ -54,7 +54,7 @@ func (h *handlers) writeNightTransitionGain(ctx context.Context, target config.S
 	if err != nil {
 		return fppcommand.TransitionGainOutcome{}, fmt.Errorf("api: building the fpp client for the transition gain write: %w", err)
 	}
-	return client.SetTransitionGain(ctx, fade.TargetPercent, fade.FadeSeconds, requestID)
+	return client.SetScheduledTransitionGain(ctx, fade.TargetPercent, fade.FadeSeconds, fade.StartsAt, fade.EndsAt, requestID)
 }
 
 // nightGainResult is what one cue's gain writes leave for the outbox row.

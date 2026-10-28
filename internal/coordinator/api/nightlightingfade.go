@@ -1,6 +1,8 @@
 package api
 
 import (
+	"time"
+
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 )
 
@@ -22,6 +24,10 @@ type nightLightingFade struct {
 
 	// FadeSeconds is how long to take. 0 applies immediately.
 	FadeSeconds int
+
+	// StartsAt and EndsAt, when EndsAt is set, schedule the fade on the
+	// FPP's own clock in place of FadeSeconds.
+	StartsAt, EndsAt time.Time
 
 	// BeforeAction is the ordering rule, and there is one principle
 	// behind it rather than two cases: THE CONTENT CHANGE HAPPENS WHILE

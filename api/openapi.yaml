@@ -9474,8 +9474,9 @@ paths:
         by `start-night`, for the operator starting a night later than
         planned: the first show of the night otherwise leads its own
         launch by the largest negative `offsetMs` among its `enterShow`
-        cues (RESTING-MODE.md §7.1) or by `lightsFadeOutMs`, whichever
-        is longer, the same lead every later cycle already holds for.
+        cues (RESTING-MODE.md §7.1) or by the longest fade-out plus
+        three seconds, whichever is longer, the same lead every later
+        cycle already holds for.
         Setting it true launches immediately instead, skipping that wait
         and the lights fade-out; an `enterShow` announcement cue still
         dispatches. Every other command ignores the field.

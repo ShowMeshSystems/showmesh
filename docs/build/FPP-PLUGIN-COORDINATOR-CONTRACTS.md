@@ -615,6 +615,8 @@ Body:
 | `targetPercent` | integer | yes | 0–100 inclusive. Out of range is rejected, never clamped. |
 | `fadeSeconds` | integer | yes | 0–86400 inclusive. `0` applies immediately. |
 | `requestId` | string | yes | Caller-minted idempotency key; a repeat of the same id is a no-op. |
+| `endsAtMs` | integer | no | Unix epoch milliseconds on the FPP host's clock. When present the fade is scheduled and `fadeSeconds` is ignored: the gain reaches `targetPercent` at this instant. A time already passed applies at once. |
+| `startsAtMs` | integer | no | Unix epoch milliseconds. Only with `endsAtMs`. The gain holds its current value until this instant; left out or already passed means now. |
 
 These are exactly `BrightnessEngine::setGain(targetPercent, fadeSeconds, now)`'s
 inputs plus a version and an idempotency key. The plugin rejects out-of-range
@@ -623,6 +625,10 @@ silently rounded into range.
 
 The response reports the applied state so the caller has evidence rather than
 an HTTP 200: `{"schemaVersion":1,"applied":true,"gainStart":100,"gainTarget":75,"fadeSeconds":30,"ceiling":60,"effectiveOutput":45}`.
+A scheduled write adds `startsAtMs` and `endsAtMs`, the window the plugin
+applied. A plugin older than 0.6.0 ignores both request fields and fades over
+`fadeSeconds` from the moment the request arrives, so the coordinator still
+sends `fadeSeconds` with the window's length.
 
 ### 2.3 What this contract forbids
 
