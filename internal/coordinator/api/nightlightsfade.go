@@ -202,13 +202,22 @@ func nightLightsFadeSeconds(d time.Duration) int {
 	return int((d + 500*time.Millisecond) / time.Second)
 }
 
+// nightFadeOutDispatchMargin is one night-loop tick. The fade-out is due a
+// tick before its window opens, and the transition starts a tick before
+// that, because the tick that enters it never sends the fade.
+const nightFadeOutDispatchMargin = 1 * time.Second
+
 // nightTransitionLeadMs is how long before the resting sequence ends the
-// transition into a show begins: the longest cue lead or lights fade-out.
+// transition into a show begins: the longest cue lead, or the longest
+// fade-out plus two [nightFadeOutDispatchMargin] ticks.
 func nightTransitionLeadMs(p config.NightSessionPayload) int64 {
 	lead := nightEnterShowLeadMs(p.EnterShow.Cues)
 	for _, ms := range []*int{p.LightsFadeOutMs, nightRenderFadeOutMs(p)} {
-		if ms != nil && int64(*ms) > lead {
-			lead = int64(*ms)
+		if ms == nil {
+			continue
+		}
+		if fade := int64(*ms) + 2*nightFadeOutDispatchMargin.Milliseconds(); fade > lead {
+			lead = fade
 		}
 	}
 	return lead
@@ -439,7 +448,8 @@ func (h *handlers) nightAdvanceLightsFadeOut(ctx context.Context, now time.Time,
 		return
 	}
 	inWindow := func(ms int) bool {
-		return !now.Before(boundaryE.Add(-time.Duration(ms)*time.Millisecond)) && now.Before(boundaryE)
+		opens := boundaryE.Add(-time.Duration(ms)*time.Millisecond - nightFadeOutDispatchMargin)
+		return !now.Before(opens) && now.Before(boundaryE)
 	}
 	if renderMs != nil && inWindow(*renderMs) {
 		h.nightRenderFade(ctx, now, rec, "out", 0, boundaryE.Add(-time.Duration(*renderMs)*time.Millisecond), boundaryE, 0)
