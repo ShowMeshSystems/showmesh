@@ -94,3 +94,23 @@ func TestRunMultiSyncListenerSuccessSetsStatusListening(t *testing.T) {
 	<-done
 	t.Fatalf("status never reported listening=true for a real bind")
 }
+
+// FPP interleaves media sync for a song's audio with its sequence sync; the
+// media packet must not move the render timeline off the sequence.
+func TestObserveSequencePacketIgnoresMediaSync(t *testing.T) {
+	timeline := multisync.NewTimeline(time.Now, multisync.Config{})
+	seq := multisync.SyncPacket{Action: multisync.SyncActionStart, FileType: multisync.SyncFileTypeSequence, Filename: "The Kill 2026.fseq"}
+	media := multisync.SyncPacket{Action: multisync.SyncActionSync, FileType: multisync.SyncFileTypeMedia, Filename: "The Kill.mp3", SecondsElapsed: 0.5}
+
+	if !observeSequencePacket(timeline, seq, "192.0.2.10") {
+		t.Fatal("sequence START was not observed")
+	}
+	if observeSequencePacket(timeline, media, "192.0.2.10") {
+		t.Fatal("media SYNC was observed")
+	}
+
+	snap := timeline.Snapshot()
+	if snap.Filename != seq.Filename || snap.FileType != multisync.SyncFileTypeSequence || snap.State != multisync.StatePlaying {
+		t.Fatalf("snapshot = %q type %v state %v, want %q sequence playing", snap.Filename, snap.FileType, snap.State, seq.Filename)
+	}
+}

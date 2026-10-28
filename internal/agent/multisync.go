@@ -12,7 +12,7 @@ import (
 )
 
 // runMultiSyncListener binds this render node's MultiSync control socket
-// and drives timeline with every received packet, until ctx is done. A bind
+// and drives timeline with every sequence sync packet, until ctx is done. A bind
 // failure degrades the node with a stated reason and never stops the agent
 // (build contract seam B3, generalizing ADR-026 decision 6's "an absent
 // runtime degrades, never stops" rule to an absent/unbindable socket).
@@ -106,15 +106,15 @@ func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName
 		if rec.SrcAddr != nil {
 			source = sourceIP(rec.SrcAddr)
 		}
-		timeline.Observe(sync, source)
+		if !observeSequencePacket(timeline, sync, source) {
+			return
+		}
 
 		// ADR-051: a Cue's audio starts on this node itself, on the
-		// sequence's own MultiSync START packet. Media packets are never
-		// passed here at all (see [multiSyncCueAudioTrigger.
-		// HandleSequencePacket]'s own doc comment), and cueAudio tolerates
-		// being called before its sources are wired, matching this
-		// function's own discover-ping tolerance for fppConnect being nil.
-		if sync.FileType == multisync.SyncFileTypeSequence && cueAudio != nil {
+		// sequence's own MultiSync START packet. cueAudio tolerates being
+		// called before its sources are wired, matching this function's own
+		// discover-ping tolerance for fppConnect being nil.
+		if cueAudio != nil {
 			cueAudio.HandleSequencePacketAt(ctx, sync, rec.ReceivedAt)
 		}
 	}
@@ -127,6 +127,18 @@ func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName
 		logger.Warn("multisync: listener stopped", "error", err)
 		status.set(false, fmt.Sprintf("multisync listener stopped unexpectedly: %v", err))
 	}
+}
+
+// observeSequencePacket feeds timeline a sequence sync packet and reports
+// whether it did. FPP sends media sync for a song's audio alongside its
+// sequence sync, and a media packet would switch the timeline to the audio
+// filename, blacking every surface until the next sequence packet.
+func observeSequencePacket(timeline *multisync.Timeline, sync multisync.SyncPacket, source string) bool {
+	if sync.FileType != multisync.SyncFileTypeSequence {
+		return false
+	}
+	timeline.Observe(sync, source)
+	return true
 }
 
 // discoverResponse builds the Ping packet this node answers a discover
