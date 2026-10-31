@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -475,5 +476,27 @@ func TestDecodeShowSurfacePayloadBoundsName(t *testing.T) {
 	_, verr := DecodeShowSurfacePayload(raw, alwaysTrueShowExists, alwaysTrueNodeDeclared)
 	if verr == nil || verr.Field != "name" {
 		t.Fatalf("an over-long name was accepted or misreported: %+v", verr)
+	}
+}
+
+func TestDecodeShowSurfacePayloadNDILead(t *testing.T) {
+	base := strings.Replace(validSurfaceJSON(), `"sourceName": "ShowMesh Garage"`, `"sourceName": "ShowMesh Garage", "leadMs": LEAD`, 1)
+	if base == validSurfaceJSON() {
+		t.Fatal("fixture no longer carries the expected sourceName text")
+	}
+
+	p, verr := DecodeShowSurfacePayload(strings.Replace(base, "LEAD", "120", 1), alwaysTrueShowExists, alwaysTrueNodeDeclared)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if p.Output.NDI.LeadMS != 120 {
+		t.Fatalf("LeadMS = %d, want 120", p.Output.NDI.LeadMS)
+	}
+
+	for _, bad := range []string{"-1", "2001", "1.5", "null"} {
+		_, verr := DecodeShowSurfacePayload(strings.Replace(base, "LEAD", bad, 1), alwaysTrueShowExists, alwaysTrueNodeDeclared)
+		if verr == nil || verr.Field != "output.ndi.leadMs" {
+			t.Fatalf("leadMs %s: got %+v, want a refusal on output.ndi.leadMs", bad, verr)
+		}
 	}
 }

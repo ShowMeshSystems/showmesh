@@ -22323,6 +22323,13 @@ components:
         sourceName:
           type: string
           minLength: 1
+        leadMs:
+          type: integer
+          minimum: 0
+          maximum: 2000
+          description: >-
+            How many milliseconds ahead of FPP this surface draws, to cancel
+            the delay of the NDI path to the screen. Omitted means 0.
     ConfigShowSurfaceHDMI:
       type: object
       description: show.surface.output.hdmi (ADR-026 - HDMI is a supported alternate).

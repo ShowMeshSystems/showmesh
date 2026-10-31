@@ -16,10 +16,29 @@ type surfaceOutputParams struct {
 	Transport string `json:"transport"`
 	NDI       *struct {
 		SourceName string `json:"sourceName"`
+		LeadMS     int    `json:"leadMs"`
 	} `json:"ndi"`
 	HDMI *struct {
 		Display string `json:"display"`
 	} `json:"hdmi"`
+}
+
+// surfaceLeadMS reads params.output.ndi.leadMs. An absent, malformed or
+// negative value is zero: a timing trim must never stop a surface drawing.
+func surfaceLeadMS(params map[string]any) int {
+	raw, ok := params["output"]
+	if !ok {
+		return 0
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return 0
+	}
+	var out surfaceOutputParams
+	if err := json.Unmarshal(b, &out); err != nil || out.NDI == nil || out.NDI.LeadMS < 0 {
+		return 0
+	}
+	return out.NDI.LeadMS
 }
 
 // outputSinkOutcome is applyOutputSink's second return value: whether the

@@ -284,6 +284,10 @@ type FrameWriter struct {
 	idleModeNow        string
 	failureOutputNow   string
 
+	// leadMS is how far ahead of the timeline this writer draws, so a picture
+	// delayed downstream lands with the lights. Set before Run.
+	leadMS int64
+
 	// queued is handed over by [FrameWriter.Queue] from any goroutine and
 	// taken by exactly one side through Swap or CompareAndSwap, which is
 	// what decides who owns (and closes) its source.
@@ -572,6 +576,10 @@ func (fw *FrameWriter) Stop() {
 // construction, so no lock: a caller changing it replaces the writer.
 func (fw *FrameWriter) IdleOutput() string { return fw.idleOutput }
 
+// SetLead makes the writer draw leadMS ahead of the timeline. The position it
+// reports stays the timeline's own. Call before Run.
+func (fw *FrameWriter) SetLead(leadMS int) { fw.leadMS = int64(leadMS) }
+
 // Counts returns the writer's cumulative written/late/dropped counts.
 func (fw *FrameWriter) Counts() (written, late, dropped int64) {
 	return fw.written.Load(), fw.late.Load(), fw.dropped.Load()
@@ -648,7 +656,7 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 	} else {
 		fw.loggedStale = false
 		pos := snap.PositionMS
-		frameIdx := fw.frameIndexFor(pos)
+		frameIdx := fw.frameIndexFor(pos + fw.leadMS)
 		if err := fw.source.ChannelRange(frameIdx, fw.channelStart, fw.channelCount, fw.buf); err != nil {
 			fw.dropped.Add(1)
 			if !fw.loggedRangeErr {

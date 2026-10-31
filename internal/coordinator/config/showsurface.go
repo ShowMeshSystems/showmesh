@@ -67,7 +67,7 @@ var (
 	showSurfaceChannelRangeKeys = map[string]bool{"startChannel": true, "channelCount": true}
 	showSurfaceGeometryKeys     = map[string]bool{"width": true, "height": true, "pixelFormat": true}
 	showSurfaceOutputKeys       = map[string]bool{"transport": true, "ndi": true, "hdmi": true}
-	showSurfaceNDIKeys          = map[string]bool{"sourceName": true}
+	showSurfaceNDIKeys          = map[string]bool{"sourceName": true, "leadMs": true}
 	showSurfaceHDMIKeys         = map[string]bool{"display": true}
 )
 
@@ -131,7 +131,13 @@ type ShowSurfaceOutput struct {
 // ShowSurfaceNDIOutput is show.surface.output.ndi.
 type ShowSurfaceNDIOutput struct {
 	SourceName string `json:"sourceName"`
+	// LeadMS is how far ahead of FPP this surface draws, to cancel the delay
+	// of the NDI path to the screen.
+	LeadMS int `json:"leadMs,omitempty"`
 }
+
+// maxShowSurfaceLeadMS bounds show.surface.output.ndi.leadMs.
+const maxShowSurfaceLeadMS = 2000
 
 // ShowSurfaceHDMI is show.surface.output.hdmi. Display names which local
 // display the node drives. Nothing consumes this yet: Track B's renderer is
@@ -397,7 +403,20 @@ func decodeShowSurfaceOutput(top map[string]json.RawMessage) (ShowSurfaceOutput,
 		if verr != nil {
 			return ShowSurfaceOutput{}, verr
 		}
-		return ShowSurfaceOutput{Transport: transport, NDI: &ShowSurfaceNDIOutput{SourceName: sourceName}}, nil
+		leadMS := 0
+		if _, present := ndiFields["leadMs"]; present {
+			leadMS, verr = decodeRequiredInt(ndiFields, "leadMs", "output.ndi.leadMs")
+			if verr != nil {
+				return ShowSurfaceOutput{}, verr
+			}
+			if leadMS < 0 || leadMS > maxShowSurfaceLeadMS {
+				return ShowSurfaceOutput{}, &ValidationError{
+					Code: ValidationCodeFieldInvalid, Field: "output.ndi.leadMs",
+					Detail: fmt.Sprintf("The picture lead must be 0 to %d ms. Enter a value in that range.", maxShowSurfaceLeadMS),
+				}
+			}
+		}
+		return ShowSurfaceOutput{Transport: transport, NDI: &ShowSurfaceNDIOutput{SourceName: sourceName, LeadMS: leadMS}}, nil
 
 	case ShowSurfaceTransportHDMI:
 		if hasNDI {

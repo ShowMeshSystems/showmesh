@@ -57,6 +57,7 @@ export function SurfaceEditor({
   const [startChannel, setStartChannel] = useState(String(surface?.payload.channelRange.startChannel ?? 1))
   const [transport, setTransport] = useState<Transport>(surface?.payload.output.transport ?? 'ndi')
   const [ndiSourceName, setNdiSourceName] = useState(surface?.payload.output.ndi?.sourceName ?? '')
+  const [ndiLeadMs, setNdiLeadMs] = useState(String(surface?.payload.output.ndi?.leadMs ?? 0))
   const [hdmiDisplay, setHdmiDisplay] = useState(surface?.payload.output.hdmi?.display ?? '')
   const [frameRate, setFrameRate] = useState(String(surface?.payload.frameRate ?? 40))
   const [saving, setSaving] = useState(false)
@@ -92,6 +93,7 @@ export function SurfaceEditor({
   else if (!Number.isInteger(heightN) || heightN < 1) blockReason = 'Height must be a whole number, at least 1.'
   else if (!Number.isInteger(Number(startChannel)) || Number(startChannel) < 1) blockReason = 'Start channel must be a whole number, at least 1.'
   else if (transport === 'ndi' && ndiSourceName.trim() === '') blockReason = 'NDI output needs a source name.'
+  else if (transport === 'ndi' && (!Number.isInteger(Number(ndiLeadMs)) || Number(ndiLeadMs) < 0 || Number(ndiLeadMs) > 2000)) blockReason = 'Picture lead must be a whole number, 0 to 2000.'
   else if (transport === 'hdmi' && hdmiDisplay.trim() === '') blockReason = 'HDMI output needs a display identifier.'
   else if (!Number.isInteger(Number(frameRate)) || Number(frameRate) < 1 || Number(frameRate) > 120) blockReason = 'Frame rate must be a whole number, 1 to 120.'
 
@@ -104,6 +106,7 @@ export function SurfaceEditor({
     setStartChannel(String(surface?.payload.channelRange.startChannel ?? 1))
     setTransport(surface?.payload.output.transport ?? 'ndi')
     setNdiSourceName(surface?.payload.output.ndi?.sourceName ?? '')
+    setNdiLeadMs(String(surface?.payload.output.ndi?.leadMs ?? 0))
     setHdmiDisplay(surface?.payload.output.hdmi?.display ?? '')
     setFrameRate(String(surface?.payload.frameRate ?? 40))
     setSaveError(null)
@@ -120,7 +123,7 @@ export function SurfaceEditor({
       frameRate: Number(frameRate),
       output:
         transport === 'ndi'
-          ? { transport: 'ndi', ndi: { sourceName: ndiSourceName.trim() } }
+          ? { transport: 'ndi', ndi: { sourceName: ndiSourceName.trim(), leadMs: Number(ndiLeadMs) } }
           : { transport: 'hdmi', hdmi: { display: hdmiDisplay.trim() } },
     }
     setSaving(true)
@@ -274,7 +277,12 @@ export function SurfaceEditor({
           ]}
         />
         {transport === 'ndi' ? (
-          <Field label="NDI source name">{(props) => <Input {...props} value={ndiSourceName} onChange={(e) => setNdiSourceName(e.target.value)} />}</Field>
+          <>
+            <Field label="NDI source name">{(props) => <Input {...props} value={ndiSourceName} onChange={(e) => setNdiSourceName(e.target.value)} />}</Field>
+            <Field label="Picture lead (ms)" help="Draws the picture this far ahead of FPP to make up for NDI delay. Saving restarts this output.">
+              {(props) => <Input {...props} className="sm-data" value={ndiLeadMs} onChange={(e) => setNdiLeadMs(e.target.value)} />}
+            </Field>
+          </>
         ) : (
           <Field
             label="HDMI display"
