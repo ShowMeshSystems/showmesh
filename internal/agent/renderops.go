@@ -751,6 +751,7 @@ func buildFSEQAssignment(action, surfaceID string, params map[string]any, logger
 		pixelFormat:   pixelFormat,
 		frameRate:     frameRate,
 		idleOutput:    idleOutput,
+		leadMS:        surfaceLeadMS(params),
 	}
 
 	rawFilename, has := params["fseqFilename"]
@@ -786,6 +787,7 @@ type fseqAssignment struct {
 	pixelFormat     string
 	frameRate       int
 	idleOutput      string
+	leadMS          int
 }
 
 // requireObject, requireString, and requireInt look up key in params (the
@@ -1095,6 +1097,7 @@ func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fs
 		func(q *pipeline.QueuedSequence) { o.queuedSequenceDropped(h, q) },
 	)
 	fw.SetSwitchGuard(func(q *pipeline.QueuedSequence) bool { return o.allowQueuedSwitch(surfaceID, h, q) })
+	fw.SetLead(a.leadMS)
 	go fw.Run(ctx)
 
 	o.mu.Lock()

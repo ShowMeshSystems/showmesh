@@ -52,6 +52,7 @@ type ConfigShowSurfaceGeometry struct {
 // ConfigShowSurfaceNDIOutput is show.surface.output.ndi.
 type ConfigShowSurfaceNDIOutput struct {
 	SourceName string `json:"sourceName"`
+	LeadMS     int    `json:"leadMs,omitempty"`
 }
 
 // ConfigShowSurfaceHDMI is show.surface.output.hdmi.

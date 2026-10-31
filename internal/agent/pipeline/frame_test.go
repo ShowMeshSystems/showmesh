@@ -908,3 +908,39 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatalf("condition never became true within 2s")
 }
+
+// TestFrameWriterDrawsAheadByLead proves the lead moves the drawn frame and
+// leaves the reported position on the timeline.
+func TestFrameWriterDrawsAheadByLead(t *testing.T) {
+	const surfaceID = "surface-1"
+	sup, _ := newTestFrameWriterSupervisor(t, surfaceID)
+
+	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: -1}
+	tl := &fakeTimelineSource{}
+	tl.set(multisync.StatePlaying, 250)
+
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, nil, testLogger{})
+	if err != nil {
+		t.Fatalf("NewFrameWriter: %v", err)
+	}
+	fw.SetLead(100)
+	ctx, cancel := context.WithCancel(context.Background())
+	go fw.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		fw.Stop()
+	})
+
+	waitFor(t, func() bool {
+		snap, ok := sup.Snapshot(surfaceID)
+		return ok && snap.TimelinePositionMS != nil
+	})
+
+	if frame, ok := source.lastRequest(); !ok || frame != 14 {
+		t.Fatalf("last ChannelRange request frame = %d (ok=%v), want 14", frame, ok)
+	}
+	snap, _ := sup.Snapshot(surfaceID)
+	if *snap.TimelinePositionMS != 250 {
+		t.Fatalf("reported position = %d, want the timeline's 250", *snap.TimelinePositionMS)
+	}
+}

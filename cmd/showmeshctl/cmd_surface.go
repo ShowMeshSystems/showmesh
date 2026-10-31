@@ -32,6 +32,7 @@ type configShowSurfaceGeometry struct {
 // configShowSurfaceNDIOutput mirrors v1.ConfigShowSurfaceNDIOutput.
 type configShowSurfaceNDIOutput struct {
 	SourceName string `json:"sourceName"`
+	LeadMS     int    `json:"leadMs,omitempty"`
 }
 
 // configShowSurfaceHDMI mirrors v1.ConfigShowSurfaceHDMI.
@@ -287,6 +288,7 @@ func cmdSurfaceSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 		pixelFormat                        string
 		frameRate                          int
 		transport, ndiSourceName, hdmiDisp string
+		ndiLeadMS                          int
 	)
 	fs.StringVar(&show, "show", "", "the show this surface belongs to (required)")
 	fs.StringVar(&name, "name", "", "the surface's name (required)")
@@ -299,6 +301,7 @@ func cmdSurfaceSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	fs.IntVar(&frameRate, "frame-rate", 0, "frameRate, 1-120 (required)")
 	fs.StringVar(&transport, "transport", "", "output.transport: ndi|hdmi (required)")
 	fs.StringVar(&ndiSourceName, "ndi-source-name", "", "output.ndi.sourceName (required when --transport=ndi)")
+	fs.IntVar(&ndiLeadMS, "ndi-lead-ms", 0, "output.ndi.leadMs: draw this many ms ahead of FPP, 0-2000")
 	fs.StringVar(&hdmiDisp, "hdmi-display", "", "output.hdmi.display (required when --transport=hdmi)")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
@@ -367,7 +370,7 @@ func cmdSurfaceSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 			_, _ = fmt.Fprintln(stderr, "showmeshctl surface set: --ndi-source-name is required when --transport=ndi")
 			return exitUsage
 		}
-		output.NDI = &configShowSurfaceNDIOutput{SourceName: ndiSourceName}
+		output.NDI = &configShowSurfaceNDIOutput{SourceName: ndiSourceName, LeadMS: ndiLeadMS}
 	case "hdmi":
 		if hdmiDisp == "" {
 			_, _ = fmt.Fprintln(stderr, "showmeshctl surface set: --hdmi-display is required when --transport=hdmi")
@@ -481,6 +484,7 @@ func printSurfaceDetail(w io.Writer, resp showSurfaceConfigResponse) {
 	case "ndi":
 		if p.Output.NDI != nil {
 			_, _ = fmt.Fprintf(w, "NDI source:   %s\n", p.Output.NDI.SourceName)
+			_, _ = fmt.Fprintf(w, "NDI lead:     %d ms\n", p.Output.NDI.LeadMS)
 		}
 	case "hdmi":
 		if p.Output.HDMI != nil {

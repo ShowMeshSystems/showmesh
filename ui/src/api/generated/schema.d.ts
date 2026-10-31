@@ -8129,6 +8129,8 @@ export interface components {
         /** @description show.surface.output.ndi (ADR-026 - NDI is the reference transport). */
         ConfigShowSurfaceNDIOutput: {
             sourceName: string;
+            /** @description How many milliseconds ahead of FPP this surface draws, to cancel the delay of the NDI path to the screen. Omitted means 0. */
+            leadMs?: number;
         };
         /** @description show.surface.output.hdmi (ADR-026 - HDMI is a supported alternate). */
         ConfigShowSurfaceHDMI: {

@@ -587,7 +587,7 @@ func (h *handlers) handleDeleteShowSurface(w http.ResponseWriter, r *http.Reques
 func mapConfigShowSurfaceOutput(o config.ShowSurfaceOutput) v1.ConfigShowSurfaceOutput {
 	out := v1.ConfigShowSurfaceOutput{Transport: o.Transport}
 	if o.NDI != nil {
-		out.NDI = &v1.ConfigShowSurfaceNDIOutput{SourceName: o.NDI.SourceName}
+		out.NDI = &v1.ConfigShowSurfaceNDIOutput{SourceName: o.NDI.SourceName, LeadMS: o.NDI.LeadMS}
 	}
 	if o.HDMI != nil {
 		out.HDMI = &v1.ConfigShowSurfaceHDMI{Display: o.HDMI.Display}
