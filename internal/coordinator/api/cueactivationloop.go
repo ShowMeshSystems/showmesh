@@ -341,6 +341,9 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 		return
 	}
 	held.observe(obs.InstanceUUID, dec)
+	if dec.State == cueactivate.StateActivated {
+		h.wrapNextCueOnRepeat(ctx, now, obs.InstanceUUID, dec.Activations)
+	}
 
 	issuer := cueActivationIssuer{PrincipalID: cueActivationSystemPrincipalID(obs.InstanceUUID)}
 
@@ -1025,30 +1028,7 @@ func (h *handlers) dispatchBlackAndSilenceAudioStopSession(ctx context.Context, 
 // an ordered Playlist), the named revision no longer exists, entryID is
 // not one of its entries, or entryID is that revision's own last entry.
 //
-// The last-entry case is a KNOWN, deliberate gap, not an oversight: an FPP
-// playlist that loops (its last entry restarting its first, rather than
-// ending) is still a real cue start with the same video-leads-audio lead
-// this whole mechanism exists to close, but this coordinator has nothing
-// to prepare ahead with at that transition, because it cannot currently
-// tell whether a given FPP-runner show.playlist loops at all.
-// config.ShowPlaylistPayload's own Repeat field (ShowPlaylistShowmeshAudio)
-// is gated to Runner=="showmesh-audio" and does not exist for an
-// FPP-runner binding; FPP's own raw playlist definition JSON DOES carry a
-// "repeat" key (confirmed against real FPP fixtures), but
-// fppidentity.ParseDefinitionEntries — the coordinator's one reader of
-// that JSON — does not extract it, and nothing else in this codebase
-// surfaces it. Wiring that through would be new plumbing in a different
-// package, not a reversible detail of this function; guessing wrong here
-// (wrapping to the first entry when the playlist does not actually loop)
-// would stage a Cue that never activates, so skipping is the correct,
-// evidence-bounded choice until that data is actually available here.
-//
-// Reads the persisted revision directly, mirroring fppreconcile's own
-// decodeStoredShowPlaylistPayload one seam over (internal/coordinator/
-// fppreconcile/reconcile.go): a stored revision is already valid, and
-// re-running config.DecodeShowPlaylistPayload's own authoring-time
-// cross-reference validation (show exists, cue resolves) here would need
-// callbacks this read-only lookup has no use for.
+// [handlers.wrapNextCueOnRepeat] handles the last entry of a repeating playlist.
 func nextPlaylistEntryCueID(ctx context.Context, cfg ConfigStore, playlistID string, playlistRevision int64, entryID string) (cueID string, ok bool, err error) {
 	if playlistID == "" || entryID == "" {
 		return "", false, nil
@@ -1130,7 +1110,10 @@ func (h *handlers) dispatchPrepareAheadAudio(ctx context.Context, now time.Time,
 		return
 	}
 	if !ok {
-		return
+		if act.NextCueID == "" {
+			return
+		}
+		nextCueID = act.NextCueID
 	}
 
 	// act.Show/act.Generation are already this activation's own pinned or
