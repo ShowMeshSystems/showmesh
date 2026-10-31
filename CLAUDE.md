@@ -222,10 +222,11 @@ handoff, not an investigation log.
   written as a screen-local variant.
 - One page width. `--page-max` is set once in `ui/src/kit/styles/shell.css` and
   no screen overrides it.
-- Never drop a control. A control with no home in a mock goes to a Linear issue
-  for a ruling, never to a working file in this repository. Invented design
-  ships inert and stamped with the kit's `NotWired`; a fabricated number is
-  dropped, because there is no honest way to show one.
+- Never drop a control. A new feature reaches the UI as a working control in the
+  same change. When no mock has a home for it, put it on the closest screen that
+  fits, built from the kit; rough placement is fine. `NotWired` is only for a
+  control with no endpoint behind it. A fabricated number is dropped, because
+  there is no honest way to show one.
 - Verify a UI change in a browser against a running coordinator, not in jsdom
   alone. Layout, route parameters and CSS ordering defects all pass the unit
   suite.

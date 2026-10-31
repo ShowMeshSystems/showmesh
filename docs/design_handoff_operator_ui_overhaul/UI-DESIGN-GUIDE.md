@@ -651,6 +651,10 @@ waiting for the owner, and no working file collects them again.
     playlist editor's "resume where it left off" checkbox went this way: playhead resume across a
     restart is a real feature needing its own design, not something to back into from a control found
     by inspection.
+21. **A new feature reaches the UI as a working control in the same change.** When no mock has a
+    home for it, it goes on the closest screen that fits, built from the kit. Rough placement is
+    acceptable until the screen is next designed. `NotWired` stays limited to a missing endpoint, as
+    rule 8 states, so a feature with an API behind it is never shipped inert.
 
 ### Where the work is not finished
 
