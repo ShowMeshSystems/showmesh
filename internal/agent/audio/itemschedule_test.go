@@ -79,6 +79,7 @@ type scheduleTestEngine struct {
 	overrides map[string]time.Duration
 	loads     []EngineHandle
 	starts    []EngineHandle
+	positions []time.Duration
 }
 
 func newScheduleTestEngine(now func() time.Time) *scheduleTestEngine {
@@ -106,8 +107,15 @@ func (e *scheduleTestEngine) Load(ctx context.Context, handle EngineHandle, medi
 func (e *scheduleTestEngine) Start(ctx context.Context, handle EngineHandle, position time.Duration) (EngineObservation, error) {
 	e.mu.Lock()
 	e.starts = append(e.starts, handle)
+	e.positions = append(e.positions, position)
 	e.mu.Unlock()
 	return e.FakeEngine.Start(ctx, handle, position)
+}
+
+func (e *scheduleTestEngine) lastStartPosition() time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.positions[len(e.positions)-1]
 }
 
 func (e *scheduleTestEngine) startCount() int {
@@ -313,6 +321,50 @@ func TestScheduledItemBoundaryIgnoresAnEarlyDecoderEnd(t *testing.T) {
 	// rather than re-preparing it.
 	if got := f.engine.loadCount(); got != 2 {
 		t.Fatalf("Load call count at the boundary = %d, want 2 (no re-prepare of an already-staged item)", got)
+	}
+}
+
+// TestScheduledItemBoundaryStartsPastWhatTheTickMissed covers two nodes
+// noticing one boundary on different watch ticks: each must land on the
+// same point of the item, so neither stays behind for the whole item.
+func TestScheduledItemBoundaryStartsPastWhatTheTickMissed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		lateBy time.Duration
+		want   time.Duration
+	}{
+		{name: "on the boundary", lateBy: 0, want: 0},
+		{name: "one tick late", lateBy: 430 * time.Millisecond, want: 430 * time.Millisecond},
+		{name: "later than the item is long", lateBy: 5 * time.Second, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newBoundaryFixture(t)
+			ctx := context.Background()
+			itemA := f.item(t, "item-a", "a.wav", "asset-a", 0)
+			itemB := f.item(t, "item-b", "b.wav", "asset-b", 1)
+			f.dec.setResult("a.wav", knownDurationResult(3*time.Second))
+			f.dec.setResult("b.wav", knownDurationResult(4*time.Second))
+			f.applyPlaylist(t, []pkgaudio.PlaylistItem{itemA, itemB}, pkgaudio.RepeatNone, pkgaudio.ItemTransitionSequential)
+			f.engine.setOverride("asset-a", time.Hour)
+
+			out, _ := f.startAt(t, 20*time.Millisecond)
+			if out.Outcome != pkgaudio.OutcomeStarted {
+				t.Fatalf("StartAt = %q (%s), want started", out.Outcome, out.Reason)
+			}
+			f.clk.advance(500 * time.Millisecond)
+			f.media.advance(3*time.Second - 100*time.Millisecond)
+			f.m.watchTick(ctx)
+
+			f.media.advance(100*time.Millisecond + tc.lateBy)
+			f.m.watchTick(ctx)
+
+			if got := f.currentItemID(t); got != "item-b" {
+				t.Fatalf("current item = %q, want item-b", got)
+			}
+			if got := f.engine.lastStartPosition(); got != tc.want {
+				t.Fatalf("item-b started at %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -177,6 +177,17 @@ func (m *Manager) maybeStageNextItemLocked(ctx context.Context, s *Session) {
 	}
 }
 
+// boundaryStartPosition is where an item starts when its boundary was
+// noticed lateBy after the fact. Each node notices on its own watch tick,
+// so starting at zero would leave nodes apart by their tick phase for the
+// whole item; starting at lateBy keeps every node on the boundary's timeline.
+func boundaryStartPosition(lateBy time.Duration, stage *itemStage) time.Duration {
+	if stage.durationKnown && lateBy >= stage.duration {
+		return 0
+	}
+	return lateBy
+}
+
 // scheduledAdvanceLocked performs one ADR-049 decision 8 item-boundary
 // transition: the playlist's next item begins at s.schedule's own
 // boundary instant, on this node's media clock, regardless of whether
@@ -257,8 +268,9 @@ func (m *Manager) scheduledAdvanceLocked(ctx context.Context, s *Session, mediaN
 	s.lastProbe = MediaItemResult{State: MediaReady, DurationKnown: stage.durationKnown, Duration: stage.duration}
 	m.applyEffectiveGainBestEffortLocked(ctx, s)
 
+	position := boundaryStartPosition(lateBy, stage)
 	startCtx, cancel := boundedEngineCallContext(ctx)
-	obs, err := m.engine.Start(startCtx, s.handle, 0)
+	obs, err := m.engine.Start(startCtx, s.handle, position)
 	cancel()
 	if err != nil {
 		s.state = pkgaudio.StateFailed
@@ -278,7 +290,7 @@ func (m *Manager) scheduledAdvanceLocked(ctx context.Context, s *Session, mediaN
 		m.logf("audio session %s: item %s started %s late at its scheduled boundary", s.id, item.ItemID, lateBy)
 	}
 	s.setGapKnownLocked(lateBy, obs.ObservedAt)
-	m.startLTCLocked(ctx, s, 0)
+	m.startLTCLocked(ctx, s, position)
 
 	s.stage = nil
 	s.schedule = &itemSchedule{itemIndex: next, itemStartAt: boundaryAt}
