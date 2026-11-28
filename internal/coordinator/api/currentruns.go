@@ -23,7 +23,9 @@ import (
 // runner families through the existing consumer-side dependencies and leaves
 // activation/reconciliation decisions in this server-side projection.
 func NewCurrentRunsReader(deps Dependencies) CurrentRunsReader {
-	reader := currentRunsReader{deps: deps.withDefaults()}
+	deps = deps.withDefaults()
+	deps.FPP = memoizeFPPLister(deps.FPP)
+	reader := currentRunsReader{deps: deps}
 	return currentrun.Coordinator{Read: reader.Snapshot}
 }
 
@@ -558,10 +560,9 @@ func mapCurrentSnapshot(s currentrun.Snapshot, now time.Time) v1.CurrentRunsResp
 	return v1.CurrentRunsResponse{ServerTime: formatTime(now), ActiveShow: v1.CurrentShowContext{Configured: s.Active.Configured, Show: show, Generation: generation}, Runs: runs}
 }
 
-// currentRunsDiffProjection masks receipt and evidence timestamps only for
-// stream change detection. Current state, values, reasons, and transitions
-// remain visible, while a polling collector cannot turn an unchanged run
-// into a stream event merely by restamping a successful read.
+// currentRunsDiffProjection is stream change detection only. Run evidence is
+// a copy of FPP and node evidence those resources already stream, so only its
+// signal and state count here; a ticking value alone sends no frame.
 func currentRunsDiffProjection(in v1.CurrentRunsResponse) v1.CurrentRunsResponse {
 	out := in
 	out.ServerTime = ""
@@ -570,24 +571,20 @@ func currentRunsDiffProjection(in v1.CurrentRunsResponse) v1.CurrentRunsResponse
 		out.Runs[i] = run
 		out.Runs[i].Freshness.ObservedAt = nil
 		out.Runs[i].Freshness.CollectedAt = nil
-		out.Runs[i].Playback.Evidence = make([]v1.Evidence, len(run.Playback.Evidence))
-		for j, ev := range run.Playback.Evidence {
-			out.Runs[i].Playback.Evidence[j] = ev
-			out.Runs[i].Playback.Evidence[j].ObservedAt = nil
-			out.Runs[i].Playback.Evidence[j].CollectedAt = nil
-			out.Runs[i].Playback.Evidence[j].Source = ""
-		}
+		out.Runs[i].Playback.Evidence = runEvidenceForDiff(run.Playback.Evidence)
 		out.Runs[i].Targets = make([]v1.CurrentRunTarget, len(run.Targets))
 		for j, target := range run.Targets {
 			out.Runs[i].Targets[j] = target
-			out.Runs[i].Targets[j].Evidence = make([]v1.Evidence, len(target.Evidence))
-			for k, ev := range target.Evidence {
-				out.Runs[i].Targets[j].Evidence[k] = ev
-				out.Runs[i].Targets[j].Evidence[k].ObservedAt = nil
-				out.Runs[i].Targets[j].Evidence[k].CollectedAt = nil
-				out.Runs[i].Targets[j].Evidence[k].Source = ""
-			}
+			out.Runs[i].Targets[j].Evidence = runEvidenceForDiff(target.Evidence)
 		}
+	}
+	return out
+}
+
+func runEvidenceForDiff(in []v1.Evidence) []v1.Evidence {
+	out := make([]v1.Evidence, len(in))
+	for i, ev := range in {
+		out[i] = v1.Evidence{Signal: ev.Signal, State: ev.State}
 	}
 	return out
 }

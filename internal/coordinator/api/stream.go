@@ -377,6 +377,7 @@ func nonNilStringSlice(v []string) []string {
 // newHub builds a Hub. Unexported: [New] is the only supported
 // constructor, so Options' defaults are always applied first.
 func newHub(deps Dependencies, opts Options, logger *slog.Logger) *Hub {
+	deps.FPP = memoizeFPPLister(deps.FPP)
 	return &Hub{
 		deps:                     deps,
 		identitySvc:              deps.Identity,
@@ -449,6 +450,7 @@ func (h *Hub) Run(ctx context.Context) {
 // for this pass — a transient store error must not crash the hub's
 // goroutine or poison every subsequent tick.
 func (h *Hub) render(ctx context.Context) {
+	ctx = withFPPListMemo(ctx)
 	now := h.clock()
 	var pending []pendingFrame
 
@@ -500,7 +502,7 @@ func (h *Hub) render(ctx context.Context) {
 			render := nodeRenderView(ctx, h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
 			participation := nodeShowParticipation(ctx, h.deps.AssetManifests, active, activeErr, nv.NodeID)
 			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation)
-			if h.updateRendered(key, node) {
+			if h.updateRendered(key, nodeDiffProjection(node)) {
 				n := node
 				pending = append(pending, pendingFrame{event: "node.changed", serverTime: formatTime(now), node: &n})
 			}
@@ -673,7 +675,7 @@ func (h *Hub) render(ctx context.Context) {
 	} else if ok {
 		const key = "nightsession:current"
 		state := mapNightSessionState(ctx, h.deps, rec, now, h.nightReadinessMaxAge, true)
-		if h.updateRendered(key, state) {
+		if h.updateRendered(key, nightSessionDiffProjection(state)) {
 			pending = append(pending, pendingFrame{event: "nightSession.changed", serverTime: formatTime(now), nightSession: &v1.NightSessionChangedEvent{Session: state}})
 		}
 	}
@@ -832,6 +834,8 @@ func (h *Hub) render(ctx context.Context) {
 func fppInstanceDiffProjection(inst v1.FPPInstance) v1.FPPInstance {
 	proj := inst
 	proj.LastPollAt = nil
+	// Plugin.State still moves when reports stop; the receipt time alone is bookkeeping.
+	proj.Plugin.LastReportedAt = nil
 	proj.Observations = make([]v1.Evidence, len(inst.Observations))
 	for i, o := range inst.Observations {
 		// Delegated, never repeated: see maskEvidenceForDiff's doc comment
@@ -851,6 +855,37 @@ func resolumeInstanceDiffProjection(inst v1.ResolumeInstance) v1.ResolumeInstanc
 		proj.Observations[i] = maskEvidenceForDiff(o)
 	}
 	return proj
+}
+
+// nightSessionDiffProjection drops UpdatedAt, which the night loop rewrites
+// without changing anything the session renders.
+func nightSessionDiffProjection(s v1.NightSessionState) v1.NightSessionState {
+	s.UpdatedAt = ""
+	return s
+}
+
+// nodeDiffProjection masks every evidence entry on n with [maskEvidenceForDiff],
+// so an agent report that only re-confirms unchanged values sends no node.changed.
+func nodeDiffProjection(n v1.Node) v1.Node {
+	proj := n
+	proj.Evidence = v1.NodeEvidence{
+		Hello:     maskEvidenceForDiff(n.Evidence.Hello),
+		LastWill:  maskEvidenceForDiff(n.Evidence.LastWill),
+		Heartbeat: maskEvidenceForDiff(n.Evidence.Heartbeat),
+	}
+	proj.Render = maskEntriesForDiff(n.Render)
+	proj.Audio = maskEntriesForDiff(n.Audio)
+	proj.Clock = maskEntriesForDiff(n.Clock)
+	proj.FPPConnect = maskEntriesForDiff(n.FPPConnect)
+	return proj
+}
+
+func maskEntriesForDiff(entries []v1.ObservationEntry) []v1.ObservationEntry {
+	out := make([]v1.ObservationEntry, len(entries))
+	for i, e := range entries {
+		out[i] = v1.ObservationEntry{Resource: e.Resource, Evidence: maskEvidenceForDiff(e.Evidence)}
+	}
+	return out
 }
 
 // instanceOnlyForDelta takes an ALREADY-masked projection (a
@@ -908,7 +943,8 @@ func (h *Hub) updateInstanceOnlyRendered(key string, v any) bool {
 // a rule duplicated in two places, because the comment stops anyone checking.
 // See TestDiffMaskingRuleHasExactlyOneImplementation.
 //
-// The rule: CollectedAt is always cleared. When State is "current" —
+// The rule: CollectedAt is always cleared. When State is "current" (or
+// "not_applicable", see below) —
 // meaning a real value with a known ObservedAt that has not aged out —
 // ObservedAt, Source and ValidForSeconds are cleared too, because all three
 // describe how and when the value was obtained rather than what it is, and
@@ -921,7 +957,9 @@ func (h *Hub) updateInstanceOnlyRendered(key string, v any) bool {
 // masked copy decided whether to send it at all.
 func maskEvidenceForDiff(o v1.Evidence) v1.Evidence {
 	o.CollectedAt = nil
-	if o.State == string(observation.StateCurrent) {
+	// not_applicable is a reading that ages to stale like a value, so the
+	// same masking is safe: a report that stops arriving still changes State.
+	if o.State == string(observation.StateCurrent) || o.State == string(observation.StateNotApplicable) {
 		o.ObservedAt = nil
 		o.Source = ""
 		o.ValidForSeconds = nil
