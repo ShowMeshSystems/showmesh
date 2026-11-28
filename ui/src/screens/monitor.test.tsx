@@ -26,6 +26,7 @@ const nodeStubs = vi.hoisted(() => ({
 
 const reconciliationStubs = vi.hoisted(() => ({
   getFPPPlaylistEntryReconciliation: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  clearMismatchedFPPPlaylistEntryObservations: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -38,6 +39,7 @@ vi.mock('../api', async () => {
     getShowSurface: (...args: never[]) => nodeStubs.getShowSurface(...args),
     getNodeAssetManifest: (...args: never[]) => nodeStubs.getNodeAssetManifest(...args),
     getFPPPlaylistEntryReconciliation: (...args: never[]) => reconciliationStubs.getFPPPlaylistEntryReconciliation(...args),
+    clearMismatchedFPPPlaylistEntryObservations: (...args: never[]) => reconciliationStubs.clearMismatchedFPPPlaylistEntryObservations(...args),
   }
 })
 
@@ -683,6 +685,60 @@ describe('Monitor · Fleet · FPP inspector · playlist observation refused', ()
     fireEvent.click(screen.getByRole('link', { name: 'Open Monitor' }))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(within(screen.getByRole('dialog')).getByText('Playlist reports are being refused')).toBeInTheDocument()
+  })
+})
+
+describe('Monitor · Needs an operator · clear mismatched FPP observations', () => {
+  const commander: Model['session'] = {
+    serverTime: '2026-08-28T21:07:00Z',
+    authenticated: true,
+    principal: { id: 'p1', name: 'operator-1', kind: 'human', role: 'operator' },
+    session: { id: 's1', deviceLabel: 'porch tablet', createdAt: '2026-08-28T20:00:00Z' },
+    credentialForm: 'session',
+    scopes: ['fpp:command'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+  } as Model['session']
+  const refused = (instanceId: string) =>
+    ({
+      ...fpp(instanceId, 'healthy'),
+      instanceUuid: `${instanceId}-uuid`,
+      playlistObservationRefused: { reason: 'refused', refusedAt: '2026-09-01T00:00:00Z' },
+    }) as FPPInstance
+  beforeEach(() => {
+    fallbackStubs.listFallbackPrograms = () => PENDING()
+    fallbackStubs.getFallbackProgram = () => PENDING()
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => PENDING()
+  })
+  afterEach(cleanup)
+
+  it('is hidden when no FPP is mismatched', () => {
+    renderScreen({ session: commander, fpp: [fpp('barn-player', 'healthy')] })
+    expect(screen.queryByRole('button', { name: 'Clear mismatched FPP observations' })).not.toBeInTheDocument()
+  })
+
+  it('is disabled without fpp:command', () => {
+    renderScreen({ session: { ...commander!, scopes: [] }, fpp: [refused('barn-player')] })
+    expect(screen.getByRole('button', { name: 'Clear mismatched FPP observations' })).toBeDisabled()
+  })
+
+  it('clears every mismatched FPP in one click and says how many', async () => {
+    const calls: unknown[] = []
+    reconciliationStubs.clearMismatchedFPPPlaylistEntryObservations = () => {
+      calls.push(1)
+      return Promise.resolve({ clearedInstanceUuids: ['a-uuid', 'b-uuid'], serverTime: '2026-08-28T21:07:00Z' })
+    }
+    renderScreen({ session: commander, fpp: [refused('a'), refused('b'), fpp('c', 'healthy')] })
+    fireEvent.click(screen.getByRole('button', { name: 'Clear mismatched FPP observations' }))
+    expect(await screen.findByText('Cleared observations for 2 FPPs.')).toBeInTheDocument()
+    expect(calls).toHaveLength(1)
+  })
+
+  it('shows the refusal when the clear fails', async () => {
+    reconciliationStubs.clearMismatchedFPPPlaylistEntryObservations = () => Promise.reject(new ApiError('Sign in to clear observations.', 403))
+    renderScreen({ session: commander, fpp: [refused('a')] })
+    fireEvent.click(screen.getByRole('button', { name: 'Clear mismatched FPP observations' }))
+    expect(await screen.findByText('Clear refused')).toBeInTheDocument()
   })
 })
 

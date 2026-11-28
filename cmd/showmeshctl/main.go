@@ -184,6 +184,9 @@ Commands:
   fpp reset-observation-sequence --confirm <id>
                                        clear one instance's stored playlist-entry observation and
                                        its sequence anchor (write, requires fpp:command, TRACK-H-H2-SPEC.md §5.1)
+  fpp reset-observation-sequence --all --confirm
+                                       clear every FPP whose playlist observations do not match
+                                       (write, requires fpp:command)
   fpp acknowledge-instance-uuid-change --confirm <id>
                                        clear a pending, unacknowledged FPP instance uuid change
                                        (write, requires config:write)

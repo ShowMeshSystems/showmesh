@@ -118,6 +118,7 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		_, _ = fmt.Fprintln(stderr, "  prev-playlist-item         <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "  set-volume                 <instance-id> <volume 0-100>")
 		_, _ = fmt.Fprintln(stderr, "  reset-observation-sequence --confirm <instance-id>  (TRACK-H-H2-SPEC.md §5.1)")
+		_, _ = fmt.Fprintln(stderr, "  reset-observation-sequence --all --confirm")
 		_, _ = fmt.Fprintln(stderr, "  acknowledge-instance-uuid-change --confirm <instance-id> ")
 		_, _ = fmt.Fprintln(stderr, "  set-transition-gain        <percent 0-100> [--fade-seconds N] [--request-id KEY]  (every FPP)")
 		_, _ = fmt.Fprintln(stderr, "  republish-playlist-definitions <instance-id> [--request-id KEY]")

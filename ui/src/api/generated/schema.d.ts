@@ -3460,6 +3460,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/integrations/fpp/playlist-entry-observations/clear-mismatched": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clear the stored observation of every instance whose observations are refused
+         * @description Behind `fpp:command`, the same scope as the per-instance DELETE /integrations/fpp/playlist-entry-observations/{instanceUuid}. Deletes the stored observation and sequence anchor of every instance whose last observation was refused as out of order (its row carries the refusal marker) and leaves every other row untouched. Takes no body. Audited as one entry naming the cleared instances. Succeeds with an empty list when nothing is refused.
+         */
+        post: operations["clearMismatchedFPPPlaylistEntryObservations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/integrations/fpp/playlist-entry-observations/{instanceUuid}/reconciliation": {
         parameters: {
             query?: never;
@@ -7933,6 +7953,13 @@ export interface components {
         /** @description The body of GET /integrations/fpp/playlist-entry-observations: the latest accepted observation for every known instance. */
         FPPPlaylistEntryObservationsResponse: {
             observations: components["schemas"]["FPPPlaylistEntryObservation"][];
+            /** Format: date-time */
+            serverTime: string;
+        };
+        /** @description The body of POST /integrations/fpp/playlist-entry-observations/clear-mismatched. */
+        FPPClearMismatchedObservationsResponse: {
+            /** @description The instance UUIDs whose stored observation was cleared, ascending. */
+            clearedInstanceUuids: string[];
             /** Format: date-time */
             serverTime: string;
         };
@@ -16655,6 +16682,31 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    clearMismatchedFPPPlaylistEntryObservations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The instances whose stored observation was cleared. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPClearMismatchedObservationsResponse"];
+                };
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];

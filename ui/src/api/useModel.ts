@@ -141,6 +141,7 @@ import type {
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
+type SchemaFPPClearMismatchedObservationsResponse = components['schemas']['FPPClearMismatchedObservationsResponse']
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only show-night verdicts.
 type SchemaFPPPlaylistReadinessResponse = components['schemas']['FPPPlaylistReadinessResponse']
 type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPlaylistEntryReconciliationResponse']
@@ -267,6 +268,10 @@ export function listFPPPlaylistEntryObservations(): Promise<SchemaFPPPlaylistEnt
 
 export function deleteFPPPlaylistEntryObservation(instanceUuid: string): Promise<void> {
   return store.deleteFPPPlaylistEntryObservation(instanceUuid)
+}
+
+export function clearMismatchedFPPPlaylistEntryObservations(): Promise<SchemaFPPClearMismatchedObservationsResponse> {
+  return store.clearMismatchedFPPPlaylistEntryObservations()
 }
 
 // The pending-instanceUuid-change acknowledgement. Same thin pass-through

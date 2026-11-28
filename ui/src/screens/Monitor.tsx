@@ -22,6 +22,7 @@ import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import {
   acknowledgeFPPInstanceUUIDChange,
   ApiError,
+  clearMismatchedFPPPlaylistEntryObservations,
   deleteFPPPlaylistEntryObservation,
   getFallbackProgram,
   getFPPPlaylistEntryReconciliation,
@@ -125,6 +126,7 @@ export function Monitor() {
   const rows = fleetRows(model, nowIso)
   const shown = kind === 'all' ? rows : rows.filter((row) => row.kind === kind)
   const items = attentionItems(model, nowIso)
+  const clearMismatched = useClearMismatchedFpp(model)
   const activity = activityRows(model.events, 5)
 
   /** A node's drawer is the route `/monitor/fleet/node/:nodeId` (D-021/D-022);
@@ -174,7 +176,8 @@ export function Monitor() {
             <SignalsTile counts={counts.signals} />
           </Tiles>
 
-          <Section id="mo-attention" title="Needs an operator">
+          <Section id="mo-attention" title="Needs an operator" aside={clearMismatched.button}>
+            {clearMismatched.outcome}
             {items.length === 0 ? (
               <RuledStrip
                 absence="empty"
@@ -333,6 +336,38 @@ export function Monitor() {
       </Panes>
     </div>
   )
+}
+
+/** One click clears every FPP whose playlist reports are refused. Hidden when none is. */
+function useClearMismatchedFpp(model: Model) {
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'fpp:command')
+  const [clearing, setClearing] = useState(false)
+  const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null)
+  const mismatched = model.fpp.filter((instance) => instance.playlistObservationRefused !== null)
+  const clear = () => {
+    setClearing(true)
+    setOutcome(null)
+    clearMismatchedFPPPlaylistEntryObservations()
+      .then((resp) => {
+        const n = resp.clearedInstanceUuids.length
+        setOutcome({ ok: true, text: n === 0 ? 'No FPP had mismatched observations.' : `Cleared observations for ${n} FPP${n === 1 ? '' : 's'}.` })
+      })
+      .catch((err: unknown) => setOutcome({ ok: false, text: describeApiError(err) }))
+      .finally(() => setClearing(false))
+  }
+  const button =
+    mismatched.length === 0 ? undefined : (
+      <Button disabled={!gate.allowed || clearing} title={gate.allowed ? `Clears ${mismatched.map((i) => i.instanceId).join(', ')}.` : gate.reason} onClick={clear}>
+        {clearing ? 'Clearing…' : 'Clear mismatched FPP observations'}
+      </Button>
+    )
+  const outcomeNode =
+    outcome === null ? null : outcome.ok ? (
+      <p className="sm-small sm-muted" role="status">{outcome.text}</p>
+    ) : (
+      <RuledStrip absence="failed" label="Clear refused" fact={outcome.text} />
+    )
+  return { button, outcome: outcomeNode }
 }
 
 function FleetTableRow({ row, selected, onSelect }: { row: FleetRow; selected: boolean; onSelect: () => void }) {

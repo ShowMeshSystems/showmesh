@@ -392,7 +392,7 @@ func TestFPPObservationSequenceRegressionSetsEvidenceBrokenMarker(t *testing.T) 
 	if len(entries) != 1 {
 		t.Fatalf("audit entries = %d, want exactly 1: %+v", len(entries), entries)
 	}
-	const wantReason = "sequence regression: last accepted sequence was 5"
+	const wantReason = "sequence regression: sequence 3 is lower than the last accepted sequence 5"
 	if entries[0].OutcomeReason != wantReason {
 		t.Errorf("audit OutcomeReason = %q, want %q", entries[0].OutcomeReason, wantReason)
 	}
@@ -1029,7 +1029,7 @@ func TestFPPObservationSequenceRegressionIsAuditedWithReason(t *testing.T) {
 		t.Fatalf("audit entries for %q = %d, want exactly 1 (the seed accept must not audit): %+v",
 			auditActionFPPObservePlaylistEntry, len(entries), entries)
 	}
-	const wantReason = "sequence regression: last accepted sequence was 5"
+	const wantReason = "sequence regression: sequence 3 is lower than the last accepted sequence 5"
 	if entries[0].OutcomeReason != wantReason {
 		t.Errorf("audit OutcomeReason = %q, want %q", entries[0].OutcomeReason, wantReason)
 	}
