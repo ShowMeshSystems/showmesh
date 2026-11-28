@@ -878,6 +878,64 @@ describe('Show Night', () => {
     expect(screen.queryByText(/interlock:power-on/)).not.toBeInTheDocument()
   })
 
+  it('offers the one matching night session on a failed show check and activates it', async () => {
+    let calls: unknown[] = []
+    stubs.putNightSessionActiveConfig = (...args: unknown[]) => {
+      calls = args
+      return Promise.resolve(activeConfigResponse('xmas-main-2026'))
+    }
+    const reason = 'Night session Halloween main loop plays Halloween 2026, not the selected show Christmas 2026. Choose one for Christmas 2026, then End session and Prepare site.'
+    renderScreen({
+      session: configWriteSession,
+      nightSession: session({
+        readiness: {
+          state: 'recorded',
+          reason: '',
+          outcome: 'not_ready',
+          completedAt: '2026-08-28T21:00:00Z',
+          sameEpoch: true,
+          fresh: true,
+          checks: [
+            {
+              name: 'night-session-show',
+              label: 'Night session for the selected show',
+              state: 'failed',
+              stateLabel: 'Failed',
+              reasons: [reason],
+              reason,
+              nightSessionCandidate: { id: 'xmas-main-2026', label: 'Xmas main' },
+            },
+          ],
+        },
+      }),
+    })
+    expect(screen.getByText(reason)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Use Xmas main' }))
+    expect(await screen.findByText(/Xmas main is now the active night session/)).toBeInTheDocument()
+    expect(calls[0]).toEqual({ session: 'xmas-main-2026' })
+    expect(screen.getByRole('button', { name: 'Use Xmas main' })).toBeDisabled()
+  })
+
+  it('offers no night session button when the failed show check names no single match', () => {
+    const reason = 'Night session Halloween main loop plays Halloween 2026, not the selected show Christmas 2026. Choose one for Christmas 2026, then End session and Prepare site.'
+    renderScreen({
+      session: configWriteSession,
+      nightSession: session({
+        readiness: {
+          state: 'recorded',
+          reason: '',
+          outcome: 'not_ready',
+          completedAt: '2026-08-28T21:00:00Z',
+          sameEpoch: true,
+          fresh: true,
+          checks: [{ name: 'night-session-show', label: 'Night session for the selected show', state: 'failed', stateLabel: 'Failed', reasons: [reason], reason }],
+        },
+      }),
+    })
+    expect(screen.getByText(reason)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Use / })).not.toBeInTheDocument()
+  })
+
   it('says so honestly when readiness recorded no individual checks', () => {
     renderScreen({
       nightSession: session({

@@ -201,7 +201,14 @@ const READINESS_CHECK_TONE: Record<NightReadinessCheck['state'], Tone> = {
   not_configured: 'pending',
 }
 
-export type ReadinessCheckReadout = { key: string; label: string; tone: Tone; facts: readonly string[] }
+export type ReadinessCheckReadout = {
+  key: string
+  label: string
+  tone: Tone
+  facts: readonly string[]
+  /** The one night session that fixes this check, offered as a one-click activation. */
+  candidate?: { id: string; label: string }
+}
 
 /**
  * Every check `run-readiness` recorded, including its own `interlock:<phase>:<name>`
@@ -214,6 +221,7 @@ export function readinessChecks(checks: readonly NightReadinessCheck[]): Readine
     label: `${check.label} · ${check.stateLabel}`,
     tone: READINESS_CHECK_TONE[check.state] ?? 'unknown',
     facts: check.reasons,
+    ...(check.nightSessionCandidate ? { candidate: check.nightSessionCandidate } : {}),
   }))
 }
 

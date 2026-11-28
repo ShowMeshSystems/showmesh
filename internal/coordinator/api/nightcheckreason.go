@@ -91,6 +91,8 @@ type nightStoredCheck struct {
 	State   string   `json:"state"`
 	Reason  string   `json:"reason"`
 	Reasons []string `json:"reasons"`
+
+	NightSessionCandidate *v1.NightSessionCandidate `json:"nightSessionCandidate"`
 }
 
 func (c nightStoredCheck) wire() v1.NightReadinessCheck {
@@ -98,6 +100,7 @@ func (c nightStoredCheck) wire() v1.NightReadinessCheck {
 	return v1.NightReadinessCheck{
 		Name: c.Name, Label: nightCheckLabel(c.Name), State: c.State,
 		StateLabel: nightCheckStateLabel(check.health), Reasons: check.messages(), Reason: strings.Join(check.messages(), " "),
+		NightSessionCandidate: c.NightSessionCandidate,
 	}
 }
 
