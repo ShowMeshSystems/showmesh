@@ -142,3 +142,10 @@ type FPPPlaylistEntryChangedEvent struct {
 	ServerTime  string                      `json:"serverTime"`
 	Observation FPPPlaylistEntryObservation `json:"observation"`
 }
+
+// FPPClearMismatchedObservationsResponse is the bulk clear's response: the
+// instance UUIDs whose refused observation was cleared, ascending.
+type FPPClearMismatchedObservationsResponse struct {
+	ClearedInstanceUUIDs []string `json:"clearedInstanceUuids"`
+	ServerTime           string   `json:"serverTime"`
+}

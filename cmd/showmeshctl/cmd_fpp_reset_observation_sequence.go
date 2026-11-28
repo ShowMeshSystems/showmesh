@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -18,10 +19,12 @@ import (
 // so --confirm is this program's own guard, not a server-enforced one.
 func cmdFPPResetObservationSequence(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl fpp reset-observation-sequence", stderr)
-	var confirm bool
+	var confirm, all bool
 	fs.BoolVar(&confirm, "confirm", false, "required: confirms clearing this player's stored status and sequence position")
+	fs.BoolVar(&all, "all", false, "clear every FPP whose playlist observations do not match, instead of one <instance-id>")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp reset-observation-sequence --confirm <instance-id>")
+		_, _ = fmt.Fprintln(stderr, "       showmeshctl fpp reset-observation-sequence --all --confirm")
 		_, _ = fmt.Fprintln(stderr, "\nClear one FPP instance's stored playlist-entry observation and its")
 		_, _ = fmt.Fprintln(stderr, "sequence anchor (DELETE /api/v1/integrations/fpp/")
 		_, _ = fmt.Fprintln(stderr, "playlist-entry-observations/{instanceUuid}, TRACK-H-H2-SPEC.md §5.1).")
@@ -29,6 +32,9 @@ func cmdFPPResetObservationSequence(args []string, stdout, stderr io.Writer, clo
 		_, _ = fmt.Fprintln(stderr, "evidence and manufacturing it are different powers. Recovers a wedged")
 		_, _ = fmt.Fprintln(stderr, "instance: a single observation carrying a wildly high sequence otherwise")
 		_, _ = fmt.Fprintln(stderr, "refuses every later legitimate observation for that instance permanently.")
+		_, _ = fmt.Fprintln(stderr, "\n--all clears only the FPP instances whose observations are currently")
+		_, _ = fmt.Fprintln(stderr, "refused as out of order (POST /api/v1/integrations/fpp/")
+		_, _ = fmt.Fprintln(stderr, "playlist-entry-observations/clear-mismatched) and lists them.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -38,6 +44,13 @@ func cmdFPPResetObservationSequence(args []string, stdout, stderr io.Writer, clo
 		return reportError(stderr, "fpp reset-observation-sequence", err)
 	}
 	rest := fs.Args()
+	if all {
+		if len(rest) != 0 {
+			fs.Usage()
+			return exitUsage
+		}
+		return clearMismatchedFPPObservations(g, confirm, stdout, stderr, clock)
+	}
 	if len(rest) != 1 {
 		fs.Usage()
 		return exitUsage
@@ -62,5 +75,42 @@ func cmdFPPResetObservationSequence(args []string, stdout, stderr io.Writer, clo
 	}
 
 	_, _ = fmt.Fprintf(stdout, "observation sequence cleared for %s\n", instanceID)
+	return exitOK
+}
+
+type clearMismatchedFPPObservationsResponse struct {
+	ClearedInstanceUUIDs []string  `json:"clearedInstanceUuids"`
+	ServerTime           time.Time `json:"serverTime"`
+}
+
+func clearMismatchedFPPObservations(g *globalFlags, confirm bool, stdout, stderr io.Writer, clock func() time.Time) int {
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl fpp reset-observation-sequence: nothing was cleared. Run it again with --all --confirm to clear every mismatched FPP.")
+		return exitUsage
+	}
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "fpp reset-observation-sequence", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	var resp clearMismatchedFPPObservationsResponse
+	if err := c.postJSON(ctx, "/api/v1/integrations/fpp/playlist-entry-observations/clear-mismatched", nil, &resp); err != nil {
+		return reportError(stderr, "fpp reset-observation-sequence", err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, "fpp reset-observation-sequence", err)
+		}
+		return exitOK
+	}
+	if len(resp.ClearedInstanceUUIDs) == 0 {
+		_, _ = fmt.Fprintln(stdout, "No FPP had mismatched playlist observations. Nothing was cleared.")
+		return exitOK
+	}
+	_, _ = fmt.Fprintf(stdout, "Cleared mismatched playlist observations for %s.\n", strings.Join(resp.ClearedInstanceUUIDs, ", "))
 	return exitOK
 }

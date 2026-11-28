@@ -2460,6 +2460,8 @@ func New(deps Dependencies, opts Options) *API {
 	// are different powers.
 	mux.HandleFunc("DELETE /api/v1/integrations/fpp/playlist-entry-observations/{instanceUuid}",
 		h.writeGuard(&scopeFPPCommand, h.handleDeleteFPPPlaylistEntryObservation))
+	mux.HandleFunc("POST /api/v1/integrations/fpp/playlist-entry-observations/clear-mismatched",
+		h.writeGuard(&scopeFPPCommand, h.handleClearMismatchedFPPPlaylistEntryObservations))
 
 	// TRACK-H-H2-SPEC.md §5, §7: the reconciliation read route, open under
 	// observation:read like every other FPP read surface — see

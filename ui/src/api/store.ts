@@ -166,6 +166,7 @@ type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
 // TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation surface,
 // the recovery path for a wedged sequence anchor.
 type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
+type SchemaFPPClearMismatchedObservationsResponse = components['schemas']['FPPClearMismatchedObservationsResponse']
 type SchemaFPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only show-night verdicts:
 // whether a Playlist is ready, and whether an instance's latest accepted
@@ -1053,6 +1054,24 @@ export class ApiStore {
     try {
       await this.client.deleteJson(
         `/integrations/fpp/playlist-entry-observations/${encodeURIComponent(instanceUuid)}`,
+        undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/integrations/fpp/playlist-entry-observations/clear-mismatched`:
+   * clears every instance whose observations are refused as out of order and
+   * returns their instance UUIDs. Behind `fpp:command`.
+   */
+  async clearMismatchedFPPPlaylistEntryObservations(): Promise<SchemaFPPClearMismatchedObservationsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaFPPClearMismatchedObservationsResponse>(
+        '/integrations/fpp/playlist-entry-observations/clear-mismatched',
         undefined,
         controller.signal,
       )

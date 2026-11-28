@@ -7,6 +7,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -528,15 +530,24 @@ func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request)
 	if len(revoked) > 0 {
 		reason += "; revoked earlier tokens " + strings.Join(revoked, ", ")
 	}
-	entry := identity.AuditEntry{
-		Timestamp: now, PrincipalID: principal.ID,
-		PrincipalName: fppPairingPrincipalPrefix + pending.instanceID,
-		Form:          identity.FormToken, ClientAddr: h.clientAddr(r),
-		Action: auditActionFPPPair, Target: pending.instanceID,
-		Kind: identity.AuditOutcome, Outcome: outcomeWordConfirmed,
-		OutcomeReason: reason,
-	}
-	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
+	if err := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		cleared, err := clearRepairedFPPObservation(ctx, tx, pending.instanceID)
+		if err != nil {
+			return identity.AuditEntry{}, err
+		}
+		outcome := reason
+		if cleared != "" {
+			outcome += "; cleared the stored playlist entry observation for instance " + cleared
+		}
+		return identity.AuditEntry{
+			Timestamp: now, PrincipalID: principal.ID,
+			PrincipalName: fppPairingPrincipalPrefix + pending.instanceID,
+			Form:          identity.FormToken, ClientAddr: h.clientAddr(r),
+			Action: auditActionFPPPair, Target: pending.instanceID,
+			Kind: identity.AuditOutcome, Outcome: outcomeWordConfirmed,
+			OutcomeReason: outcome,
+		}, nil
+	}); err != nil {
 		h.logWarn("failed to audit a completed fpp pairing", "instanceId", pending.instanceID, "error", err)
 	}
 
@@ -547,6 +558,31 @@ func (h *handlers) handleClaimFPPPairing(w http.ResponseWriter, r *http.Request)
 
 		CoordinatorPublicKey: h.deps.CoordinatorPublicKey,
 	})
+}
+
+// clearRepairedFPPObservation deletes the stored playlist entry observation
+// for the instance UUID mapped to endpointID, returning that UUID when a row
+// was deleted. A UUID shared with another endpoint is left alone.
+func clearRepairedFPPObservation(ctx context.Context, tx *store.Tx, endpointID string) (string, error) {
+	mapped, err := tx.GetFPPInstanceUUID(ctx, endpointID)
+	if errors.Is(err, store.ErrFPPInstanceUUIDNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	owners, err := tx.GetFPPInstanceUUIDByUUID(ctx, mapped.UUID)
+	if err != nil {
+		return "", err
+	}
+	if len(owners) != 1 || owners[0].EndpointID != endpointID {
+		return "", nil
+	}
+	deleted, err := tx.DeleteFPPPlaylistEntryObservation(ctx, mapped.UUID)
+	if err != nil || !deleted {
+		return "", err
+	}
+	return mapped.UUID, nil
 }
 
 // mapInstance is [mapFPPInstance] plus the one fact only this store knows:

@@ -84,3 +84,67 @@ func TestCmdFPPResetObservationSequenceServerError(t *testing.T) {
 		t.Fatalf("exit code = %d, want a non-zero exit for a 403", code)
 	}
 }
+
+func TestCmdFPPResetObservationSequenceAllRefusesWithoutConfirm(t *testing.T) {
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPP([]string{"reset-observation-sequence", "--server", ts.URL, "--all"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage; stderr=%s", code, stderr.String())
+	}
+	if called {
+		t.Error("the coordinator was called without --confirm")
+	}
+	if !strings.Contains(stderr.String(), "--all --confirm") {
+		t.Errorf("stderr = %q, want it to name --all --confirm", stderr.String())
+	}
+}
+
+func TestCmdFPPResetObservationSequenceAllRefusesAnInstanceArgument(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdFPP([]string{"reset-observation-sequence", "--server", "http://example.invalid", "--all", "--confirm", "u1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage", code)
+	}
+}
+
+func TestCmdFPPResetObservationSequenceAllClearsAndListsInstances(t *testing.T) {
+	var gotMethod, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"clearedInstanceUuids":["uuid-a","uuid-b"],"serverTime":"2026-08-16T21:00:00Z"}`))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPP([]string{"reset-observation-sequence", "--server", ts.URL, "--all", "--confirm"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/v1/integrations/fpp/playlist-entry-observations/clear-mismatched" {
+		t.Errorf("request = %s %s, want POST .../clear-mismatched", gotMethod, gotPath)
+	}
+	if want := "Cleared mismatched playlist observations for uuid-a, uuid-b."; !strings.Contains(stdout.String(), want) {
+		t.Errorf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
+func TestCmdFPPResetObservationSequenceAllReportsNothingToClear(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"clearedInstanceUuids":[],"serverTime":"2026-08-16T21:00:00Z"}`))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPP([]string{"reset-observation-sequence", "--server", ts.URL, "--all", "--confirm"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK || !strings.Contains(stdout.String(), "Nothing was cleared.") {
+		t.Fatalf("exit %d stdout %q, want exitOK and a nothing-to-clear line", code, stdout.String())
+	}
+}

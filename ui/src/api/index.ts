@@ -386,6 +386,7 @@ export {
   putFPPBrightnessExcludedRanges,
   listFPPPlaylistEntryObservations,
   deleteFPPPlaylistEntryObservation,
+  clearMismatchedFPPPlaylistEntryObservations,
   acknowledgeFPPInstanceUUIDChange,
   getFPPPlaylistReadiness,
   getFPPPlaylistEntryReconciliation,
