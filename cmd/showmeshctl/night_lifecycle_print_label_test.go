@@ -35,3 +35,19 @@ func TestPrintNightSessionStateDetailPrintsEachCheckReasonOnItsOwnLine(t *testin
 		t.Fatalf("output = %q, want one line per reason", out.String())
 	}
 }
+
+func TestPrintNightSessionStateDetailOffersTheMatchingNightSession(t *testing.T) {
+	var out bytes.Buffer
+	printNightSessionStateDetail(&out, nightSessionStateWire{ID: "sess-1", Readiness: nightReadinessWire{
+		State: "recorded",
+		Checks: []nightReadinessCheckWire{{
+			Label: "Night session for the selected show", StateLabel: "Failed",
+			Reasons:               []string{"Night session Halloween main loop plays Halloween 2026, not the selected show Christmas 2026. Choose one for Christmas 2026, then End session and Prepare site."},
+			NightSessionCandidate: &nightSessionCandidateWire{ID: "xmas-main-2026", Label: "Xmas main"},
+		}},
+	}})
+	want := "      Night session Xmas main plays the selected show. Run showmeshctl night activate xmas-main-2026 to use it.\n"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("output = %q, want the activate hint", out.String())
+	}
+}

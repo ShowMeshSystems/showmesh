@@ -320,6 +320,7 @@ export function ShowNight() {
                             ))}
                           </ul>
                         )}
+                        {check.candidate && <UseNightSessionButton candidate={check.candidate} />}
                       </div>
                     ))}
                   </div>
@@ -713,6 +714,34 @@ export function ShowNight() {
       )}
 
     </>
+  )
+}
+
+/** Activates the one night session a failed readiness check names, the same call as `showmeshctl night activate`. */
+function UseNightSessionButton({ candidate }: { candidate: { id: string; label: string } }) {
+  const model = useModelContext()
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const [state, setState] = useState<{ kind: 'idle' } | { kind: 'saving' } | { kind: 'done' } | { kind: 'failed'; reason: string }>({ kind: 'idle' })
+  const activate = () => {
+    setState({ kind: 'saving' })
+    putNightSessionActiveConfig({ session: candidate.id })
+      .then(() => setState({ kind: 'done' }))
+      .catch((err: unknown) => setState({ kind: 'failed', reason: describeApiError(err) }))
+  }
+  return (
+    <p className="sm-readout__fact">
+      <button
+        type="button"
+        className="sm-linkbutton"
+        disabled={!gate.allowed || state.kind === 'saving' || state.kind === 'done'}
+        title={gate.allowed ? undefined : gate.reason}
+        onClick={activate}
+      >
+        Use {candidate.label}
+      </button>
+      {state.kind === 'done' && <> {candidate.label} is now the active night session. Run End session, then Prepare site.</>}
+      {state.kind === 'failed' && <> {state.reason}</>}
+    </p>
   )
 }
 

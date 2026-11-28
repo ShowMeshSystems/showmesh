@@ -36,6 +36,15 @@ type NightReadinessCheck struct {
 	// Reason is Reasons joined by a space. Deprecated: read Reasons. It
 	// stays because a v1 field is never removed.
 	Reason string `json:"reason"`
+	// NightSessionCandidate is the one night session that would fix this
+	// check. Absent when there is none or more than one.
+	NightSessionCandidate *NightSessionCandidate `json:"nightSessionCandidate,omitempty"`
+}
+
+// NightSessionCandidate names a night session an operator can activate.
+type NightSessionCandidate struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 // NightReadiness is the current session's most recent run-readiness

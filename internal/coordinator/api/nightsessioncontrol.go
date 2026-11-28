@@ -744,6 +744,11 @@ func (h *handlers) nightPrepareSiteTx(ctx context.Context, tx *store.Tx, now tim
 		p := nightNotReadyProblem("The night settings changed while Prepare site was running. Run Prepare site again.")
 		return nightCommandOutcome{}, &p, nil
 	}
+	if check := nightShowMatch(ctx, tx, nil); check.cause != nil {
+		return nightCommandOutcome{}, nil, check.cause
+	} else if p := nightShowMatchRefusal(check); p != nil {
+		return nightCommandOutcome{}, p, nil
+	}
 
 	rec := store.NightSessionRecord{
 		ID: uuid.NewString(), ConfigObjectID: objectID, ConfigRevision: revision,
@@ -786,6 +791,11 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 		}
 		if problem != nil {
 			return nightCommandOutcome{}, problem, nil
+		}
+		if check := nightShowMatch(ctx, h.deps.Config, nil); check.cause != nil {
+			return nightCommandOutcome{}, nil, check.cause
+		} else if p := nightShowMatchRefusal(check); p != nil {
+			return nightCommandOutcome{}, p, nil
 		}
 		dispatchCtx, cancel := nightBoundInterlockDispatch(ctx)
 		gate := h.nightLiveEvaluatePhaseGate(dispatchCtx, payload, config.NightInterlockPhasePrepareSite, overrides, callerHasOverrideScope)
@@ -1036,6 +1046,9 @@ func (h *handlers) nightStartPreshow(ctx context.Context, tx *store.Tx, now time
 	}
 	switch current.State {
 	case nightStatePreparing:
+		if p, err := h.nightPinnedShowMatchTx(ctx, tx, *current); err != nil || p != nil {
+			return nightCommandOutcome{}, p, err
+		}
 		gateProblem, auditParams := h.nightGatePhaseTx(ctx, tx, now, *current, config.NightInterlockPhaseStartPreshow, overrides, callerHasOverrideScope)
 		if gateProblem != nil {
 			return nightCommandOutcome{}, gateProblem, nil
@@ -1074,6 +1087,9 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 	}
 	switch current.State {
 	case nightStatePreshow:
+		if p, err := h.nightPinnedShowMatchTx(ctx, tx, *current); err != nil || p != nil {
+			return nightCommandOutcome{}, p, err
+		}
 		readiness, err := tx.GetLatestNightReadiness(ctx, current.ID)
 		if err != nil {
 			if err == store.ErrNightReadinessNotFound {
@@ -1662,6 +1678,8 @@ type nightReadinessCheck struct {
 	reasons []string
 	// cause is the error behind a fixed message. It is logged, never shown.
 	cause error
+	// candidate is the one night session that would fix this check.
+	candidate *v1.NightSessionCandidate
 }
 
 // nightRunReadinessCommand computes readiness OUTSIDE any store
@@ -1711,7 +1729,7 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 		overrideAuditParams = nightInterlockOverrideAuditParams(gate.Overridden)
 	}
 
-	checks, outcome := h.nightComputeReadinessChecks(ctx, now, payload, interlockChecks)
+	checks, outcome := h.nightComputeReadinessChecks(ctx, now, current.ConfigObjectID, payload, interlockChecks)
 	for _, c := range checks {
 		if c.cause != nil {
 			h.logWarn("night readiness: a check could not finish", "sessionId", current.ID, "check", c.name, "error", c.cause)
@@ -1785,9 +1803,10 @@ func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1
 // nightinstanceparticipation.go's own per-participating-instance check
 // runs here too: an FPP or Resolume instance the active show selects is
 // checked, and one it does not select is not checked at all.
-func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Time, payload config.NightSessionPayload, interlockChecks []nightReadinessCheck) ([]nightReadinessCheck, string) {
+func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Time, pinnedSessionID string, payload config.NightSessionPayload, interlockChecks []nightReadinessCheck) ([]nightReadinessCheck, string) {
+	pinned := nightNamedSession{id: pinnedSessionID, label: payload.Label, show: payload.Show}
+	checks := []nightReadinessCheck{nightShowMatch(ctx, h.deps.Config, &pinned)}
 	instanceIDs := map[string]bool{payload.ShowPlaylist.FPPInstanceID: true, payload.Resting.FPPInstanceID: true}
-	var checks []nightReadinessCheck
 	for id := range instanceIDs {
 		if id == "" {
 			continue
@@ -1924,6 +1943,7 @@ func nightEncodeChecks(checks []nightReadinessCheck) []v1.NightReadinessCheck {
 		out = append(out, v1.NightReadinessCheck{
 			Name: c.name, Label: nightCheckLabel(c.name), State: string(c.health),
 			StateLabel: nightCheckStateLabel(c.health), Reasons: c.messages(), Reason: strings.Join(c.messages(), " "),
+			NightSessionCandidate: c.candidate,
 		})
 	}
 	return out

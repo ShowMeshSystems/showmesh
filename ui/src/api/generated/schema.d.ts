@@ -8694,6 +8694,7 @@ export interface components {
          *     Every configured `audio.node` also gets `audio:clock:<nodeId>`, which fails when the node plays through PipeWire (`node.audio.engine.sink_backend` is `pipewiresink`) on GStreamer's default clock (`node.audio.engine.clock_source` is `default`). That node stalls the whole PipeWire graph and plays nothing while its engine still reports usable. It is `not_verifiable` while the node has not reported both signals.
          *     It also checks every configured `audio.node` object's measured program-to-LTC alignment against `audio.settings`' `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded` (never `failed`) once the measured offset exceeds the threshold, naming both numbers in `reasons`, `healthy` once it is within the threshold, and `not_verifiable` whenever this coordinator holds no current measurement for that node. A drifting show still runs; this is a warning, never a reason `outcome` blocks `start-night`.
          *     It also checks `fpp-plugin-reports-refused`: one fleet-wide check, not one per instance, that fails when any FPP instance this session binds is currently refusing the plugin's playlist-entry reports (a sequence regression, most often a plugin reinstall or a wiped state directory), one item of `reasons` per FPP. Cleared by the referenced instance's next accepted report or by DELETE .../playlist-entry-observations/{instanceUuid}.
+         *     It also checks `night-session-show`: the active night session and the night session this night was prepared with must both play the show `show.active` selects. It fails otherwise, and Prepare site, Start preshow and Start night refuse for the same reason. No `interlockOverrides` entry covers it. With no show selected it passes. When exactly one night session plays the selected show, `nightSessionCandidate` names it.
          */
         NightReadinessCheck: {
             name: string;
@@ -8713,6 +8714,12 @@ export interface components {
              * @description Deprecated. Read `reasons`. This is the items of `reasons` joined by one space, and the empty string when there are none. It stays because a v1 field is never removed.
              */
             reason: string;
+            /** @description Present only on a failed `night-session-show` check when exactly one night session plays the selected show. Activate it with PUT /config/night.session.active. */
+            nightSessionCandidate?: {
+                id: string;
+                /** @description The night session's label, or its id when it has none. */
+                label: string;
+            };
         };
         /** @description One safety check that refused a night command. */
         NightBlockedCheck: {

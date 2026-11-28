@@ -111,6 +111,9 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		for _, reason := range c.Reasons {
 			_, _ = fmt.Fprintf(w, "      %s\n", reason)
 		}
+		if n := c.NightSessionCandidate; n != nil {
+			_, _ = fmt.Fprintf(w, "      Night session %s plays the selected show. Run showmeshctl night activate %s to use it.\n", n.Label, n.ID)
+		}
 	}
 
 	_, _ = fmt.Fprintf(w, "\nPower phase: %s (%s)\n", s.PowerPhase.State, s.PowerPhase.Reason)

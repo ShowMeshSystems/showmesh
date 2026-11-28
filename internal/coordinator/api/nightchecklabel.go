@@ -26,6 +26,7 @@ var nightCheckLabels = map[string]string{
 	"fpp-plugin-reports-refused":                   "FPP reports",
 	nightCatalogCurrentCheckPrefix:                 "Cue list on nodes",
 	nightParticipationCheckPrefix:                  "FPP and Resolume in this show",
+	nightShowMatchCheckName:                        "Night session for the selected show",
 }
 
 // nightCheckLabelPrefixes names the checks whose id ends in the node,

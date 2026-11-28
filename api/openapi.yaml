@@ -24028,6 +24028,14 @@ components:
         wiped state directory), one item of `reasons` per FPP. Cleared by
         the referenced instance's next accepted report or by
         DELETE .../playlist-entry-observations/{instanceUuid}.
+
+        It also checks `night-session-show`: the active night session and
+        the night session this night was prepared with must both play the
+        show `show.active` selects. It fails otherwise, and Prepare site,
+        Start preshow and Start night refuse for the same reason. No
+        `interlockOverrides` entry covers it. With no show selected it
+        passes. When exactly one night session plays the selected show,
+        `nightSessionCandidate` names it.
       required: [name, label, state, stateLabel, reasons, reason]
       properties:
         name:
@@ -24069,6 +24077,19 @@ components:
             Deprecated. Read `reasons`. This is the items of `reasons`
             joined by one space, and the empty string when there are none.
             It stays because a v1 field is never removed.
+        nightSessionCandidate:
+          type: object
+          description: >-
+            Present only on a failed `night-session-show` check when exactly
+            one night session plays the selected show. Activate it with
+            PUT /config/night.session.active.
+          required: [id, label]
+          properties:
+            id:
+              type: string
+            label:
+              type: string
+              description: The night session's label, or its id when it has none.
     NightBlockedCheck:
       type: object
       description: One safety check that refused a night command.

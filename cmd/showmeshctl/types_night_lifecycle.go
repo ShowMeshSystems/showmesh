@@ -13,7 +13,13 @@ type nightReadinessCheckWire struct {
 	StateLabel string   `json:"stateLabel"`
 	Reasons    []string `json:"reasons"`
 	// Reason is the deprecated joined form. Printing reads Reasons.
-	Reason string `json:"reason"`
+	Reason                string                     `json:"reason"`
+	NightSessionCandidate *nightSessionCandidateWire `json:"nightSessionCandidate,omitempty"`
+}
+
+type nightSessionCandidateWire struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 type nightReadinessWire struct {
