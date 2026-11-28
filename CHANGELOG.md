@@ -11,6 +11,88 @@ not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-28
+
+Feature release on the 0.x line. Pre-alpha. Upgrade the coordinator, the
+operator UI and every node agent together, because the `0.x` line makes no
+compatibility promise between versions. The plainer FPP observation message
+reaches the FPP screen only with the next FPP plugin release.
+
+### Night and show control
+
+- Prepare site, Start preshow and Start night refuse when the active night
+  session plays a different show from the selected one, and readiness says
+  which night session to choose. When exactly one night session plays the
+  selected show, Show Night offers a button to switch to it.
+- Night sessions run prepare-site, power down and end session site actions in
+  place of the thermal profile box and the power bindings. Site settings hold
+  shutdown sequences and power-on actions, with test power buttons on Live
+  Control and Show Night, and `showmeshctl sitepower`.
+- Emergency stop levels 2 and 3 choose which shutdown sequences run, and
+  Settings has an Emergency stop tab for each level's follow-up actions.
+- Power down starts after 90 seconds without FPP's stop, and both power down
+  and power down presentation can be forced. Power down presentation asks for
+  confirmation.
+- Night sessions can run their own cues after the last show.
+- Fade Out Night fades the lights before stopping FPP, with its own duration.
+- The lights fade out of resting on an exact window before every show, and
+  fade back in after each show instead of snapping on. Resting comes back
+  seconds after the last show sequence ends.
+- Night first-cue staging finds its playlist by FPP playlist name.
+- Night readiness no longer warns about background audio items that name no
+  node.
+
+### FPP
+
+- Re-pairing an FPP clears its stored playlist observation, so a reinstalled
+  plugin no longer has its reports refused. When observations still do not
+  match, one button on Monitor, or `showmeshctl fpp
+  reset-observation-sequence --all --confirm`, clears every mismatched FPP,
+  and the refusal says only that the observations do not match and to clear
+  them in ShowMesh.
+- Sequence testing: a show's cue can play from FPP without adding it to the
+  playlist, by mapping FPP sequence files to cues on the Sequence testing tab.
+- The FPP plugin's credential can run a single stored action.
+- A repeating FPP playlist preloads its first song on its last entry.
+
+### Audio
+
+- Every song's timecode starts at its own cue's offset.
+- Cue audio starts where FPP's sequence is at the start instant, and a cue
+  song starts once when cue.activate and MultiSync START overlap.
+- Restarting a sequence restarts its audio.
+- The MultiSync listener stamps packets when it reads them and no longer
+  stalls behind a Prepare.
+
+### Render and Resolume
+
+- Resolume layers fade over a set time through OSC, and rendered projections
+  fade with the lights.
+- Resolume can be controlled over OSC only. Over OSC a layer group can launch
+  a column and clear its layers.
+- Resting projection keeps playing after the show cue stops.
+- A render surface keeps drawing while FPP sends media sync for the song's
+  audio, and can draw a set number of milliseconds ahead of FPP to cancel NDI
+  delay.
+
+### Integrations
+
+- MQTT action brokers are stored settings with a Settings tab and
+  `showmeshctl mqtt-broker`, the built-in broker is listed, and the action
+  Broker field is a dropdown. Each MQTT action confirmation choice explains
+  what it waits for.
+- Coordinator events can be sent to a Home Assistant MQTT broker.
+
+### Coordinator and install
+
+- An open operator UI receives only real changes on its live connection. It
+  used to receive about the whole screen state every second while FPPs were
+  playing, which kept the coordinator busy.
+- Upgrade backups hardlink unchanged media instead of copying it again.
+- Installer updates keep the saved operator UI port without asking.
+- Built with Go 1.26.11 and a patched gorilla/websocket, clearing
+  GO-2026-6809, GO-2026-6859 and GO-2026-6278.
+
 ## 0.5.1 - 2026-10-18
 
 Patch release on the 0.x line. Pre-alpha. FPP plugin 0.3.0 is still the
