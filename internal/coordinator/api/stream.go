@@ -377,6 +377,7 @@ func nonNilStringSlice(v []string) []string {
 // newHub builds a Hub. Unexported: [New] is the only supported
 // constructor, so Options' defaults are always applied first.
 func newHub(deps Dependencies, opts Options, logger *slog.Logger) *Hub {
+	deps.FPP = memoizeFPPLister(deps.FPP)
 	return &Hub{
 		deps:                     deps,
 		identitySvc:              deps.Identity,
@@ -449,6 +450,7 @@ func (h *Hub) Run(ctx context.Context) {
 // for this pass — a transient store error must not crash the hub's
 // goroutine or poison every subsequent tick.
 func (h *Hub) render(ctx context.Context) {
+	ctx = withFPPListMemo(ctx)
 	now := h.clock()
 	var pending []pendingFrame
 
@@ -673,7 +675,7 @@ func (h *Hub) render(ctx context.Context) {
 	} else if ok {
 		const key = "nightsession:current"
 		state := mapNightSessionState(ctx, h.deps, rec, now, h.nightReadinessMaxAge, true)
-		if h.updateRendered(key, state) {
+		if h.updateRendered(key, nightSessionDiffProjection(state)) {
 			pending = append(pending, pendingFrame{event: "nightSession.changed", serverTime: formatTime(now), nightSession: &v1.NightSessionChangedEvent{Session: state}})
 		}
 	}
@@ -832,6 +834,8 @@ func (h *Hub) render(ctx context.Context) {
 func fppInstanceDiffProjection(inst v1.FPPInstance) v1.FPPInstance {
 	proj := inst
 	proj.LastPollAt = nil
+	// Plugin.State still moves when reports stop; the receipt time alone is bookkeeping.
+	proj.Plugin.LastReportedAt = nil
 	proj.Observations = make([]v1.Evidence, len(inst.Observations))
 	for i, o := range inst.Observations {
 		// Delegated, never repeated: see maskEvidenceForDiff's doc comment
@@ -851,6 +855,13 @@ func resolumeInstanceDiffProjection(inst v1.ResolumeInstance) v1.ResolumeInstanc
 		proj.Observations[i] = maskEvidenceForDiff(o)
 	}
 	return proj
+}
+
+// nightSessionDiffProjection drops UpdatedAt, which the night loop rewrites
+// without changing anything the session renders.
+func nightSessionDiffProjection(s v1.NightSessionState) v1.NightSessionState {
+	s.UpdatedAt = ""
+	return s
 }
 
 // nodeDiffProjection masks every evidence entry on n with [maskEvidenceForDiff],
