@@ -365,3 +365,34 @@ func (s *Store) DeleteFPPPlaylistEntryObservation(ctx context.Context, instanceU
 func (t *Tx) DeleteFPPPlaylistEntryObservation(ctx context.Context, instanceUUID string) (bool, error) {
 	return deleteFPPPlaylistEntryObservation(ctx, t.tx, instanceUUID)
 }
+
+// DeleteEvidenceBrokenFPPPlaylistEntryObservations removes every row whose
+// evidence_broken_at_millis is set and returns the cleared instance UUIDs in
+// order. Rows without the marker are untouched.
+func (t *Tx) DeleteEvidenceBrokenFPPPlaylistEntryObservations(ctx context.Context) ([]string, error) {
+	rows, err := t.tx.QueryContext(ctx,
+		`SELECT instance_uuid FROM fpp_playlist_entry_observations WHERE evidence_broken_at_millis IS NOT NULL ORDER BY instance_uuid`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list evidence-broken fpp playlist entry observations: %w", err)
+	}
+	var uuids []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("store: list evidence-broken fpp playlist entry observations: %w", err)
+		}
+		uuids = append(uuids, u)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("store: list evidence-broken fpp playlist entry observations: %w", err)
+	}
+	_ = rows.Close()
+	for _, u := range uuids {
+		if _, err := deleteFPPPlaylistEntryObservation(ctx, t.tx, u); err != nil {
+			return nil, err
+		}
+	}
+	return uuids, nil
+}

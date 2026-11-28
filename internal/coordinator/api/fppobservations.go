@@ -110,12 +110,14 @@ func observedAtRegressed(incoming, stored time.Time) bool {
 	return incoming.Before(stored.Add(-entryOccurrenceRegressionThreshold))
 }
 
-func fppObservationConflictProblem(detail string) v1.Problem {
+// fppObservationMismatchProblem is the plain text the plugin and UI show for
+// both 409 refusals; the numbers that explain it stay in the audit entry.
+func fppObservationMismatchProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
-		Title:  "Observation sequence conflict",
+		Title:  "FPP observations do not match",
 		Status: http.StatusConflict,
-		Detail: detail,
+		Detail: "This FPP's playlist observations do not match what ShowMesh has stored. Clear them on the ShowMesh Monitor screen.",
 	}
 }
 
@@ -431,7 +433,7 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		// retries this identical branch and gets another chance to record
 		// it — bounding a transient failure's blind spot to roughly one
 		// posting interval rather than leaving it permanently unrecorded.
-		reason := "sequence regression: last accepted sequence was " + formatInt64(lastAcceptedSequence)
+		reason := "sequence regression: sequence " + formatInt64(rec.Sequence) + " is lower than the last accepted sequence " + formatInt64(lastAcceptedSequence)
 		if markErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
 			if err := tx.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, req.InstanceUUID, now); err != nil {
 				return identity.AuditEntry{}, err
@@ -445,14 +447,11 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		}); markErr != nil {
 			h.logError("failed to record fpp playlist entry observation evidence-broken marker", "instanceUuid", req.InstanceUUID, "error", markErr)
 		}
-		writeProblem(w, h.logger, now, fppObservationConflictProblem(
-			"sequence "+formatInt64(rec.Sequence)+" is lower than the last accepted sequence "+formatInt64(lastAcceptedSequence)+
-				" for this instance; this refusal leaves the stored observation untouched"))
+		writeProblem(w, h.logger, now, fppObservationMismatchProblem())
 		return
 	case errors.Is(txErr, store.ErrFPPPlaylistEntryObservationSequenceConflict):
 		auditRefusal("sequence " + formatInt64(rec.Sequence) + " reused with a different body")
-		writeProblem(w, h.logger, now, fppObservationConflictProblem(
-			"sequence "+formatInt64(rec.Sequence)+" was already used for this instance with a different observation body"))
+		writeProblem(w, h.logger, now, fppObservationMismatchProblem())
 		return
 	case txErr != nil:
 		h.writeInternalError(w, now, "put fpp playlist entry observation", txErr)
@@ -689,6 +688,43 @@ func (h *handlers) handleDeleteFPPPlaylistEntryObservation(w http.ResponseWriter
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// auditActionFPPClearMismatchedPlaylistEntryObservations is the bulk clear's
+// fixed audit action.
+const auditActionFPPClearMismatchedPlaylistEntryObservations = "fpp.clear_mismatched_playlist_entry_observations"
+
+// handleClearMismatchedFPPPlaylistEntryObservations serves
+// POST /api/v1/integrations/fpp/playlist-entry-observations/clear-mismatched
+// behind fpp:command: the per-instance reset applied to every refused row.
+func (h *handlers) handleClearMismatchedFPPPlaylistEntryObservations(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	ctx := r.Context()
+	ac := authFromContext(ctx)
+
+	var cleared []string
+	writeErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		var err error
+		cleared, err = tx.DeleteEvidenceBrokenFPPPlaylistEntryObservations(ctx)
+		if err != nil {
+			return identity.AuditEntry{}, err
+		}
+		return identity.AuditEntry{
+			Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+			Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+			Action: auditActionFPPClearMismatchedPlaylistEntryObservations,
+			Params: map[string]any{"clearedInstanceUuids": cleared},
+			Kind:   identity.AuditAdmin,
+		}, nil
+	})
+	if writeErr != nil {
+		h.writeInternalError(w, now, "clear mismatched fpp playlist entry observations", writeErr)
+		return
+	}
+	if cleared == nil {
+		cleared = []string{}
+	}
+	jsonWrite(w, v1.FPPClearMismatchedObservationsResponse{ServerTime: formatTime(now), ClearedInstanceUUIDs: cleared})
 }
 
 // maxReportedUnknownFPPObservationMembers bounds how many unknown member
